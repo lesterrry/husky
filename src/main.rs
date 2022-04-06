@@ -16,12 +16,6 @@ use tui::{
 mod secure;
 mod strings;
 
-#[derive(Clone)]
-enum InputMode {
-	Normal,
-	Editing,
-}
-
 #[derive(PartialEq, Clone)]
 enum AppState {
 	Auth,
@@ -37,10 +31,8 @@ enum ChatState {
 
 #[derive(Clone)]
 struct App {
-	input: String,
 	inputs: [String; 3],
 	auth_key: String,
-	input_mode: InputMode,
 	input_focus: u8,
 	max_input_focus: u8,
 	app_state: AppState,
@@ -51,10 +43,8 @@ struct App {
 impl App {
 	fn initial() -> App {
 		App {
-			input: String::new(),
 			inputs: ["".to_string(), "".to_string(), "".to_string()],
 			auth_key: String::new(),
-			input_mode: InputMode::Normal,
 			input_focus: 0,
 			max_input_focus: 1,
 			app_state: AppState::Auth,
