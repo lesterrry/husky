@@ -1,1 +1,4 @@
 /target
+/Cargo.lock
+/src/secure.rs
+/.DS_Store
