@@ -29,7 +29,6 @@ pub const USERNAME_BLOCK_ACTIVE: &str = " Username (ENTER to initiate tie) ";
 pub const NEW_MESSAGE_BLOCK_INACTIVE: &str = " Message ";
 pub const NEW_MESSAGE_BLOCK_ACTIVE: &str = " Message (ENTER to send) ";
 pub const ENCRYPTION_KEY_BLOCK: &str = " Encryption key ";
-pub const MESSAGES_BLOCK: &str = " Messages ";
 pub const CHAT_STATE_UNTIED: &str = "Untied";
 pub const CHAT_STATE_TIED_WITH: &str = "Tied with";
 pub const CHAT_STATE_ERROR: &str = "Error";

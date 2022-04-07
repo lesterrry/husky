@@ -384,8 +384,7 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>, app: &App) {
 			let messages = List::new(messages).block(
 				Block::default()
 					.style(Style::default().fg(Color::Gray))
-					.borders(Borders::ALL)
-					.title(strings::MESSAGES_BLOCK),
+					.borders(Borders::ALL),
 			);
 			f.render_widget(messages, chunks[3]);
 			let new_message_input = Paragraph::new(app.inputs[2].as_ref())
