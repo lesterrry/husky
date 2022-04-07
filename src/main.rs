@@ -93,6 +93,7 @@ impl App {
 			state: AppState::Auth,
 		}
 	}
+	// Uh I don't like this
 	const fn null() -> App {
 		App {
 			server: secure::Server {
@@ -110,14 +111,19 @@ impl App {
 
 // TODO:
 // I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrrr.
-// static mut CURRENT_JOB_LOG: Vec<String> = Vec::new();
-// static mut CURRENT_JOB_PROGRESS: u16 = 0;
 static mut APP: App = App::null();
 
 fn start_auth_job() {
 	change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
 	std::thread::spawn(move || unsafe {
-		//CURRENT_JOB_LOG.push("Starting...".to_string());
+		match &APP.state {
+			AppState::Job(job) => {
+				let mut job = job.clone();
+				job.log_add("Starting...");
+				APP.state = AppState::Job(job)
+			}
+			_ => (),
+		}
 	});
 }
 
