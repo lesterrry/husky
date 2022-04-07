@@ -114,17 +114,22 @@ impl App {
 static mut APP: App = App::null();
 
 fn start_auth_job() {
-	change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
-	std::thread::spawn(move || unsafe {
-		match &APP.state {
-			AppState::Job(job) => {
-				let mut job = job.clone();
-				job.log_add("Starting...");
-				APP.state = AppState::Job(job)
+	fn log_add(msg: &str) {
+		// TODO:
+		// This is imo the only 'real' *unsafe* part of the story
+		unsafe {
+			match &APP.state {
+				AppState::Job(job) => {
+					let mut job = job.clone();
+					job.log_add(msg);
+					APP.state = AppState::Job(job)
+				}
+				_ => (),
 			}
-			_ => (),
 		}
-	});
+	}
+	change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
+	std::thread::spawn(move || log_add("Starting..."));
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -171,13 +176,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 		loop {
 			match APP.state {
 				AppState::Auth => {
-					terminal.draw(|f| auth_ui(f, &APP))?;
+					terminal.draw(|f| auth_ui(f))?;
 				}
 				AppState::Chat(_) => {
-					terminal.draw(|f| chat_ui(f, &APP))?;
+					terminal.draw(|f| chat_ui(f))?;
 				}
 				AppState::Job(_) => {
-					terminal.draw(|f| job_ui(f, &APP))?;
+					terminal.draw(|f| job_ui(f))?;
 				}
 			}
 			if let Event::Key(key) = event::read()? {
@@ -238,7 +243,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	}
 }
 
-fn job_ui<B: Backend>(f: &mut Frame<B>, apps: &App) {
+fn job_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
 		match &APP.state {
 			AppState::Job(job) => {
@@ -274,11 +279,22 @@ fn job_ui<B: Backend>(f: &mut Frame<B>, apps: &App) {
 								.style(Style::default().fg(Color::White)),
 						);
 					f.render_widget(progress_bar, chunks[0]);
-					let log = Block::default()
-						.borders(Borders::ALL)
-						.style(Style::default().fg(Color::White))
-						.title(strings::LOG_BLOCK)
-						.title_alignment(Alignment::Center);
+					let log_messages: Vec<ListItem> = job
+						.log
+						.iter()
+						.enumerate()
+						.map(|(i, m)| {
+							let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
+							ListItem::new(content)
+						})
+						.collect();
+					let log = List::new(log_messages).block(
+						Block::default()
+							.borders(Borders::ALL)
+							.style(Style::default().fg(Color::White))
+							.title(strings::LOG_BLOCK)
+							.title_alignment(Alignment::Center),
+					);
 					f.render_widget(log, chunks[1]);
 				}
 			}
@@ -291,7 +307,7 @@ fn job_ui<B: Backend>(f: &mut Frame<B>, apps: &App) {
 	}
 }
 
-fn auth_ui<B: Backend>(f: &mut Frame<B>, apps: &App) {
+fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
 		let chunks = Layout::default()
 			.direction(Direction::Vertical)
@@ -352,7 +368,7 @@ fn auth_ui<B: Backend>(f: &mut Frame<B>, apps: &App) {
 	}
 }
 
-fn chat_ui<B: Backend>(f: &mut Frame<B>, apps: &App) {
+fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
 		match &APP.state {
 			AppState::Chat(chat) => {
