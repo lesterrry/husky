@@ -52,6 +52,14 @@ struct Job {
 }
 
 impl Job {
+	fn default(with_title: String) -> Job {
+		Job {
+			title: with_title,
+			progress: 0,
+			state: JobState::InProgress,
+			log: Vec::new(),
+		}
+	}
 	fn log_add(&mut self, msg: &str) {
 		self.log.push(msg.to_string())
 	}
@@ -67,7 +75,6 @@ struct Chat {
 	messages: Vec<String>,
 }
 
-#[derive(Clone)]
 struct App {
 	server: secure::Server,
 	inputs: [String; 3],
@@ -88,14 +95,29 @@ impl App {
 	}
 }
 
+// TODO:
+// I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrr
+static mut CURRENT_JOB_LOG: Vec<String> = Vec::new();
+static mut CURRENT_JOB_PROGRESS: u16 = 0;
+
+fn start_auth_job(app: &mut App) {
+	change_state(
+		AppState::Job(Job::default(strings::AUTH_JOB.to_string())),
+		app,
+	);
+	std::thread::spawn(move || unsafe {
+		CURRENT_JOB_LOG.push("Starting...".to_string());
+	});
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
 	enable_raw_mode()?;
 	let mut stdout = io::stdout();
 	execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
 	let backend = CrosstermBackend::new(stdout);
 	let mut terminal = Terminal::new(backend)?;
-	let app = App::initial();
-	let res = run_app(&mut terminal, app);
+	let app: App = App::initial();
+	let result = run_app(&mut terminal, app);
 	disable_raw_mode()?;
 	execute!(
 		terminal.backend_mut(),
@@ -103,7 +125,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 		DisableMouseCapture
 	)?;
 	terminal.show_cursor()?;
-	if let Err(err) = res {
+	if let Err(err) = result {
 		println!("{}\n{:?}", strings::FATAL_RUNTIME_ERROR, err)
 	}
 	Ok(())
@@ -132,7 +154,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
 			AppState::Chat(_) => {
 				terminal.draw(|f| chat_ui(f, &app))?;
 			}
-			_ => unimplemented!(),
+			AppState::Job(_) => {
+				terminal.draw(|f| job_ui(f, &app))?;
+			}
 		}
 		if let Event::Key(key) = event::read()? {
 			match key.modifiers {
@@ -168,14 +192,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
 								}
 								KeyCode::Enter => {
 									if app.state == AppState::Auth && app.input_focus == 1 {
-										change_state(
-											AppState::Chat(Chat {
-												auth_key: app.inputs[0].clone(),
-												messages: Vec::new(),
-												state: ChatState::Disconnected,
-											}),
-											&mut app,
-										)
+										start_auth_job(&mut app);
+									// change_state(
+									// 	AppState::Chat(Chat {
+									// 		auth_key: app.inputs[0].clone(),
+									// 		messages: Vec::new(),
+									// 		state: ChatState::Disconnected,
+									// 	}),
+									// 	&mut app,
+									// )
 									} else if let AppState::Chat(_) = app.state {
 										unimplemented!()
 									};
