@@ -87,6 +87,8 @@ struct App {
 	input_focus: u8,
 	max_input_focus: u8,
 	state: AppState,
+	typing_state_iteration: u8,
+	requested_exit: bool,
 }
 
 impl App {
@@ -98,6 +100,8 @@ impl App {
 			input_focus: 0,
 			max_input_focus: 1,
 			state: AppState::Auth,
+			typing_state_iteration: 0,
+			requested_exit: false,
 		}
 	}
 	// FIXME:
@@ -114,6 +118,8 @@ impl App {
 			input_focus: 0,
 			max_input_focus: 1,
 			state: AppState::Auth,
+			typing_state_iteration: 0,
+			requested_exit: false,
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
@@ -146,7 +152,7 @@ impl App {
 
 // FIXME:
 // I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrrr.
-/// The main global App instance
+/// The main global App instance, initialized as nullable
 static mut APP: App = App::null();
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -192,27 +198,24 @@ fn change_state(to: AppState) {
 /// App's lifecycle loop
 fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	unsafe {
-		loop {
-			match APP.state {
-				AppState::Auth => {
-					terminal.draw(|f| auth_ui(f))?;
-				}
-				AppState::Chat(_) => {
-					terminal.draw(|f| chat_ui(f))?;
-				}
-				AppState::Job(_) => {
-					terminal.draw(|f| job_ui(f))?;
-				}
+		thread::spawn(move || loop {
+			let event = event::read();
+			if event.is_err() {
+				return;
 			}
-			if let Event::Key(key) = event::read()? {
+			if let Event::Key(key) = event.unwrap() {
 				match key.modifiers {
 					KeyModifiers::CONTROL => {
 						if key.code == KeyCode::Char('c') {
-							return Ok(());
+							APP.requested_exit = true;
+							return;
 						}
 					}
 					_ => match key.code {
-						KeyCode::F(9) => return Ok(()),
+						KeyCode::F(9) => {
+							APP.requested_exit = true;
+							return;
+						}
 						KeyCode::Up => {
 							if APP.input_focus <= 0 {
 								APP.input_focus = APP.max_input_focus
@@ -250,6 +253,23 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 					},
 				}
 			}
+		});
+		loop {
+			thread::sleep(time::Duration::from_millis(150));
+			if APP.requested_exit {
+				return Ok(());
+			}
+			match APP.state {
+				AppState::Auth => {
+					terminal.draw(|f| auth_ui(f))?;
+				}
+				AppState::Chat(_) => {
+					terminal.draw(|f| chat_ui(f))?;
+				}
+				AppState::Job(_) => {
+					terminal.draw(|f| job_ui(f))?;
+				}
+			}
 		}
 	}
 }
@@ -270,6 +290,11 @@ fn start_auth_job() {
 /// Renders app's `Job` state UI
 fn job_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
+		if APP.typing_state_iteration >= 3 {
+			APP.typing_state_iteration = 0
+		} else {
+			APP.typing_state_iteration += 1
+		}
 		match &APP.state {
 			AppState::Job(job) => {
 				let chunks = Layout::default()
@@ -280,7 +305,8 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 					.split(f.size());
 				let main_window = Block::default()
 					.borders(Borders::NONE)
-					.title(job.title.clone())
+					//.title(job.title.clone())
+					.title(strings::MESSAGES_BLOCK_TYPING[APP.typing_state_iteration as usize])
 					.title_alignment(Alignment::Center)
 					.style(Style::default().bg(Color::DarkGray));
 				f.render_widget(main_window, chunks[0]);
@@ -304,6 +330,8 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 								.style(Style::default().fg(Color::White)),
 						);
 					f.render_widget(progress_bar, chunks[0]);
+					// TODO:
+					// It'd be cool to place `ListItem`s into `Job` instead of `String`s, so I could have the log formatted differently
 					let log_messages: Vec<ListItem> = job
 						.log
 						.iter()

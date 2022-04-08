@@ -20,12 +20,11 @@ pub const USAGE_INSTRUCTIONS: &str =
 [F9] / [CTRL + C] – Exit";
 
 pub const FATAL_RUNTIME_ERROR: &str = "Runtime error occured:\n";
-// pub const FATAL_RUNTIME_ERROR_NOT_JOB: &str = "Job UI called, but app's state is not 'Job'";
-// pub const FATAL_RUNTIME_ERROR_NOT_CHAT: &str = "Chat UI called, but app's state is not 'Chat'";
-pub const AUTH_KEY_BLOCK_INACTIVE: &str = " Auth key ";
-pub const AUTH_KEY_BLOCK_ACTIVE: &str = " Auth key (ENTER to submit) ";
 pub const USERNAME_BLOCK_INACTIVE: &str = " Username ";
 pub const USERNAME_BLOCK_ACTIVE: &str = " Username (ENTER to initiate tie) ";
+pub const AUTH_KEY_BLOCK_INACTIVE: &str = " Auth key ";
+pub const AUTH_KEY_BLOCK_ACTIVE: &str = " Auth key (ENTER to submit) ";
+pub const MESSAGES_BLOCK_TYPING: [&str; 4] = ["Typing   ", "Typing.  ", "Typing.. ", "Typing..."];
 pub const NEW_MESSAGE_BLOCK_INACTIVE: &str = " Message ";
 pub const NEW_MESSAGE_BLOCK_ACTIVE: &str = " Message (ENTER to send) ";
 pub const ENCRYPTION_KEY_BLOCK: &str = " Encryption key ";
@@ -36,4 +35,3 @@ pub const CHAT_STATE_LOGOUT_PROMPT: &str = " / ENTER to Log out";
 pub const LOG_BLOCK: &str = " Progress log ";
 pub const JOB_STARTING: &str = "Starting...";
 pub const AUTH_JOB: &str = "Authorizing...";
-pub const AUTH_JOB_STARTING: &str = "Starting auth...";
