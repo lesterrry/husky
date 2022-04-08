@@ -4,12 +4,13 @@ COPYRIGHT LESTER COVEY (me@lestercovey.ml),
 
 ***************************/
 
+use chrono::{Local, Timelike};
 use crossterm::{
 	event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
 	execute,
 	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::{error::Error, io, process};
+use std::{error::Error, io, process, thread, time};
 use tui::{
 	backend::{Backend, CrosstermBackend},
 	layout::{Alignment, Constraint, Direction, Layout},
@@ -43,6 +44,7 @@ enum JobState {
 	Err,
 }
 
+/// The job data is stored here. Job is a state when app is busy with something
 #[derive(PartialEq, Clone)]
 struct Job {
 	title: String,
@@ -61,13 +63,16 @@ impl Job {
 		}
 	}
 	fn log_add(&mut self, msg: &str) {
-		self.log.push(msg.to_string())
+		let time = Local::now();
+		let time_string = format!("{}:{}:{}", time.hour(), time.minute(), time.second());
+		self.log.push(format!("({}) {}", time_string, msg));
 	}
 	fn log_clear(&mut self) {
 		self.log = Vec::new()
 	}
 }
 
+/// The chat data is stored here
 #[derive(PartialEq, Clone)]
 struct Chat {
 	auth_key: String,
@@ -75,6 +80,7 @@ struct Chat {
 	messages: Vec<String>,
 }
 
+/// The main application data is stored here
 struct App {
 	server: secure::Server,
 	inputs: [String; 3],
@@ -84,6 +90,7 @@ struct App {
 }
 
 impl App {
+	/// Get initial App instance
 	fn initial() -> App {
 		App {
 			server: secure::Server::default(),
@@ -93,7 +100,9 @@ impl App {
 			state: AppState::Auth,
 		}
 	}
+	// FIXME:
 	// Uh I don't like this
+	/// Get nullable const-friendly App instance
 	const fn null() -> App {
 		App {
 			server: secure::Server {
@@ -107,30 +116,38 @@ impl App {
 			state: AppState::Auth,
 		}
 	}
-}
-
-// TODO:
-// I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrrr.
-static mut APP: App = App::null();
-
-fn start_auth_job() {
-	fn log_add(msg: &str) {
-		// TODO:
+	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
+	fn job_log_add(&mut self, msg: &str) {
+		// FIXME:
 		// This is imo the only 'real' *unsafe* part of the story
-		unsafe {
-			match &APP.state {
-				AppState::Job(job) => {
-					let mut job = job.clone();
-					job.log_add(msg);
-					APP.state = AppState::Job(job)
-				}
-				_ => (),
+		match &self.state {
+			AppState::Job(job) => {
+				let mut job = job.clone();
+				job.log_add(msg);
+				self.state = AppState::Job(job)
 			}
+			_ => { /* TODO: Maybe panic? */ }
 		}
 	}
-	change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
-	std::thread::spawn(move || log_add("Starting..."));
+
+	fn job_progress_set(&mut self, progress: u16) {
+		// FIXME:
+		// This is imo the only 'real' *unsafe* part of the story
+		match &self.state {
+			AppState::Job(job) => {
+				let mut job = job.clone();
+				job.progress = progress;
+				self.state = AppState::Job(job)
+			}
+			_ => { /* TODO: Maybe panic? */ }
+		}
+	}
 }
+
+// FIXME:
+// I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrrr.
+/// The main global App instance
+static mut APP: App = App::null();
 
 fn main() -> Result<(), Box<dyn Error>> {
 	unsafe {
@@ -155,6 +172,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 	}
 }
 
+/// Switch App's state to a corresponding one and reset all associated variables
 fn change_state(to: AppState) {
 	unsafe {
 		match to.clone() {
@@ -171,6 +189,7 @@ fn change_state(to: AppState) {
 	}
 }
 
+/// App's lifecycle loop
 fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	unsafe {
 		loop {
@@ -220,14 +239,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 									KeyCode::Enter => {
 										if APP.state == AppState::Auth && APP.input_focus == 1 {
 											start_auth_job();
-										// change_state(
-										// 	AppState::Chat(Chat {
-										// 		auth_key: app.inputs[0].clone(),
-										// 		messages: Vec::new(),
-										// 		state: ChatState::Disconnected,
-										// 	}),
-										// 	&mut app,
-										// )
 										} else if let AppState::Chat(_) = APP.state {
 											unimplemented!()
 										};
@@ -243,6 +254,20 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	}
 }
 
+/// Change App's state to `Job` and begin authorization
+fn start_auth_job() {
+	unsafe {
+		change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
+		thread::spawn(move || {
+			APP.job_log_add(strings::JOB_STARTING);
+			thread::sleep(time::Duration::from_secs(5));
+			APP.job_log_add("Done.");
+			APP.job_progress_set(75);
+		});
+	}
+}
+
+/// Renders app's `Job` state UI
 fn job_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
 		match &APP.state {
@@ -284,7 +309,7 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 						.iter()
 						.enumerate()
 						.map(|(i, m)| {
-							let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
+							let content = vec![Spans::from(Span::raw(format!("{}. {}", i, m)))];
 							ListItem::new(content)
 						})
 						.collect();
@@ -307,6 +332,7 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 	}
 }
 
+/// Renders app's `Auth` state UI
 fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
 		let chunks = Layout::default()
@@ -368,6 +394,7 @@ fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 	}
 }
 
+/// Renders app's `Chat` state UI
 fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
 		match &APP.state {

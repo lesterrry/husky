@@ -34,4 +34,6 @@ pub const CHAT_STATE_TIED_WITH: &str = "Tied with";
 pub const CHAT_STATE_ERROR: &str = "Error";
 pub const CHAT_STATE_LOGOUT_PROMPT: &str = " / ENTER to Log out";
 pub const LOG_BLOCK: &str = " Progress log ";
+pub const JOB_STARTING: &str = "Starting...";
 pub const AUTH_JOB: &str = "Authorizing...";
+pub const AUTH_JOB_STARTING: &str = "Starting auth...";
