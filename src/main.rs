@@ -6,14 +6,15 @@ COPYRIGHT LESTER COVEY (me@lestercovey.ml),
 
 use chrono::Local;
 use crossterm::{
-	event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
+	event::{self, Event, KeyCode, KeyModifiers},
 	execute,
 	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use futures_util::StreamExt;
 use reqwest;
 use std::{error::Error, io, panic, process, thread, time};
-use tokio;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use tokio::task;
+use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tui::{
 	backend::{Backend, CrosstermBackend},
 	layout::{Alignment, Constraint, Direction, Layout},
@@ -70,9 +71,6 @@ impl Job {
 		let t_string = time.format("%H:%M:%S");
 		self.log.push(format!("({}) {}", t_string, msg));
 	}
-	fn log_clear(&mut self) {
-		self.log = Vec::new()
-	}
 }
 
 /// The chat data is stored here
@@ -81,32 +79,34 @@ struct Chat {
 	auth_key: String,
 	state: ChatState,
 	messages: Vec<String>,
+	typing_state_iteration: u8,
 }
 
 /// The main application data is stored here
 struct App {
-	socket: Option<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
 	server: secure::Server,
 	inputs: [String; 3],
 	input_focus: u8,
 	max_input_focus: u8,
 	state: AppState,
-	typing_state_iteration: u8,
 	requested_exit: bool,
+	// FIXME:
+	// Oh this is the stupidest thing in this script
+	// I just couldn't figure out a way to tame all the async stuff otherwise
+	requested_job: u8,
 }
 
 impl App {
 	/// Get initial App instance
 	fn initial() -> App {
 		App {
-			socket: None,
 			server: secure::Server::default(),
 			inputs: ["".to_string(), "".to_string(), "".to_string()],
 			input_focus: 0,
 			max_input_focus: 1,
 			state: AppState::Auth,
-			typing_state_iteration: 0,
 			requested_exit: false,
+			requested_job: 0,
 		}
 	}
 	// FIXME:
@@ -114,7 +114,6 @@ impl App {
 	/// Get nullable const-friendly App instance
 	const fn null() -> App {
 		App {
-			socket: None,
 			server: secure::Server {
 				key: String::new(),
 				root_url: String::new(),
@@ -125,8 +124,8 @@ impl App {
 			input_focus: 0,
 			max_input_focus: 1,
 			state: AppState::Auth,
-			typing_state_iteration: 0,
 			requested_exit: false,
+			requested_job: 0,
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
@@ -226,6 +225,9 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 		async fn perform() {
 			unsafe {
 				loop {
+					if let AppState::Job(_) = APP.state {
+						continue;
+					}
 					let event = event::read();
 					if event.is_err() {
 						return;
@@ -270,7 +272,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 												if APP.state == AppState::Auth
 													&& APP.input_focus == 1
 												{
-													start_auth_job().await;
+													APP.requested_job = 1
 												} else if let AppState::Chat(_) = APP.state {
 													unimplemented!()
 												};
@@ -293,6 +295,13 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 			if APP.requested_exit {
 				return Ok(());
 			}
+			match &APP.requested_job {
+				1 => {
+					APP.requested_job = 0;
+					start_auth_job().await
+				}
+				_ => (),
+			}
 			match APP.state {
 				AppState::Auth => {
 					terminal.draw(|f| auth_ui(f))?;
@@ -308,23 +317,46 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	}
 }
 
+async fn handle_ws(with: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>) {
+	unsafe {
+		let (write, read) = with.split();
+
+		read.for_each(|message| async {
+			match message {
+				Ok(ok) => match ok {
+					Message::Text(txt) => APP.job_log_add(&txt),
+					_ => (),
+				},
+				Err(_) => APP.job_log_add("ERR"),
+			}
+		})
+		.await;
+		APP.job_log_add("Leaving loop-_-")
+	}
+}
+
+// TODO:
+// Remove on release
+#[allow(dead_code)]
 fn print_type_of<T>(_: &T) {
 	unsafe { APP.job_log_add(&format!("{}", std::any::type_name::<T>())) }
 }
 
-async fn ws_connect() {
+async fn ws_connect() -> Result<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>, ()> {
 	unsafe {
-		println!("{}:{}", APP.server.root_url, APP.server.port);
 		let url =
 			url::Url::parse(&format!("ws://{}:{}", APP.server.root_url, APP.server.port)).unwrap();
-		let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-		print_type_of(&ws_stream)
+		let connection = connect_async(url).await;
+		if connection.is_err() {
+			return Err(());
+		}
+		let (ws_stream, _) = connection.unwrap();
+		Ok(ws_stream)
 	}
 }
 
 /// Change App's state to `Job` and begin authorization
 async fn start_auth_job() {
-	#[tokio::main]
 	async fn perform() {
 		unsafe {
 			APP.job_log_add(strings::JOB_STARTING);
@@ -336,14 +368,23 @@ async fn start_auth_job() {
 			.await;
 			APP.job_progress_set(25);
 			// I'm EXTREMELY sorry but I slow things down purposefully just to enjoy the cool interfaces
-			//thread::sleep(time::Duration::from_millis(200));
+			thread::sleep(time::Duration::from_millis(200));
 			if res.is_ok() {
 				APP.job_log_add(strings::JOB_SUCCESS);
 				let txt = res.unwrap().text().await;
 				if txt.is_ok() {
 					if txt.as_ref().unwrap() == "Ok" {
 						APP.job_log_add(strings::AUTH_JOB_PRECONNECT_SUCCESS);
-						ws_connect().await;
+						let connection = ws_connect().await;
+						APP.job_progress_set(50);
+						match connection {
+							Err(_) => {
+								APP.job_log_add(strings::AUTH_JOB_CONNECT_FAULT);
+								APP.job_state_set(JobState::Err);
+								return;
+							}
+							Ok(ok) => tokio::spawn(handle_ws(ok)),
+						};
 					} else {
 						APP.job_log_add(&txt.unwrap());
 						APP.job_state_set(JobState::Err);
@@ -364,11 +405,7 @@ async fn start_auth_job() {
 		}
 	}
 	change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
-	thread::spawn(|| {
-		perform();
-	})
-	.join()
-	.expect("A");
+	perform().await;
 }
 
 /// Renders app's `Job` state UI
