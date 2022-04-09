@@ -19,7 +19,7 @@ pub const USAGE_INSTRUCTIONS: &str =
 [ENTER] – Submit input
 [F9] / [CTRL + C] – Exit";
 
-pub const FATAL_RUNTIME_ERROR: &str = "Runtime error occured:\n";
+pub const FATAL_RUNTIME_ERROR: &str = "Runtime error occured\n";
 pub const USERNAME_BLOCK_INACTIVE: &str = " Username ";
 pub const USERNAME_BLOCK_ACTIVE: &str = " Username (ENTER to initiate tie) ";
 pub const AUTH_KEY_BLOCK_INACTIVE: &str = " Auth key ";
@@ -34,4 +34,10 @@ pub const CHAT_STATE_ERROR: &str = "Error";
 pub const CHAT_STATE_LOGOUT_PROMPT: &str = " / ENTER to Log out";
 pub const LOG_BLOCK: &str = " Progress log ";
 pub const JOB_STARTING: &str = "Starting...";
+pub const JOB_SUCCESS: &str = "SUCCESS";
 pub const AUTH_JOB: &str = "Authorizing...";
+pub const AUTH_JOB_PRECONNECT: &str = "Reaching server...";
+pub const AUTH_JOB_PRECONNECT_SUCCESS: &str = "Connection approved";
+pub const AUTH_JOB_PRECONNECT_FAULT_PARSE: &str = "Unable to parse server response";
+pub const AUTH_JOB_PRECONNECT_FAULT_GET: &str = "Unable to get response from server";
+pub const AUTH_JOB_PRECONNECT_FAULT_DISAPPROVED: &str = "Connection not approved. Try again later";

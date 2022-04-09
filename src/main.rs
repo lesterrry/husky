@@ -4,13 +4,16 @@ COPYRIGHT LESTER COVEY (me@lestercovey.ml),
 
 ***************************/
 
-use chrono::{Local, Timelike};
+use chrono::Local;
 use crossterm::{
 	event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
 	execute,
 	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use std::{error::Error, io, process, thread, time};
+use reqwest;
+use std::{error::Error, io, panic, process, thread, time};
+use tokio;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tui::{
 	backend::{Backend, CrosstermBackend},
 	layout::{Alignment, Constraint, Direction, Layout},
@@ -64,8 +67,8 @@ impl Job {
 	}
 	fn log_add(&mut self, msg: &str) {
 		let time = Local::now();
-		let time_string = format!("{}:{}:{}", time.hour(), time.minute(), time.second());
-		self.log.push(format!("({}) {}", time_string, msg));
+		let t_string = time.format("%H:%M:%S");
+		self.log.push(format!("({}) {}", t_string, msg));
 	}
 	fn log_clear(&mut self) {
 		self.log = Vec::new()
@@ -82,6 +85,7 @@ struct Chat {
 
 /// The main application data is stored here
 struct App {
+	socket: Option<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>>,
 	server: secure::Server,
 	inputs: [String; 3],
 	input_focus: u8,
@@ -95,6 +99,7 @@ impl App {
 	/// Get initial App instance
 	fn initial() -> App {
 		App {
+			socket: None,
 			server: secure::Server::default(),
 			inputs: ["".to_string(), "".to_string(), "".to_string()],
 			input_focus: 0,
@@ -109,10 +114,12 @@ impl App {
 	/// Get nullable const-friendly App instance
 	const fn null() -> App {
 		App {
+			socket: None,
 			server: secure::Server {
-				server_key: String::new(),
-				server_root_url: String::new(),
-				server_name: String::new(),
+				key: String::new(),
+				root_url: String::new(),
+				port: String::new(),
+				name: String::new(),
 			},
 			inputs: [String::new(), String::new(), String::new()],
 			input_focus: 0,
@@ -136,6 +143,7 @@ impl App {
 		}
 	}
 
+	/// Change progress of App's job (if current state is `Job`, otherwise do nothing)
 	fn job_progress_set(&mut self, progress: u16) {
 		// FIXME:
 		// This is imo the only 'real' *unsafe* part of the story
@@ -148,6 +156,20 @@ impl App {
 			_ => { /* TODO: Maybe panic? */ }
 		}
 	}
+
+	/// Change state of App's job (if current state is `Job`, otherwise do nothing)
+	fn job_state_set(&mut self, job_state: JobState) {
+		// FIXME:
+		// This is imo the only 'real' *unsafe* part of the story
+		match &self.state {
+			AppState::Job(job) => {
+				let mut job = job.clone();
+				job.state = job_state;
+				self.state = AppState::Job(job)
+			}
+			_ => { /* TODO: Maybe panic? */ }
+		}
+	}
 }
 
 // FIXME:
@@ -155,21 +177,24 @@ impl App {
 /// The main global App instance, initialized as nullable
 static mut APP: App = App::null();
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+	let orig_hook = panic::take_hook();
+	panic::set_hook(Box::new(move |panic_info| {
+		orig_hook(panic_info);
+		disable_raw_mode().unwrap();
+		process::exit(1);
+	}));
 	unsafe {
 		enable_raw_mode()?;
 		let mut stdout = io::stdout();
-		execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+		execute!(stdout, EnterAlternateScreen)?;
 		let backend = CrosstermBackend::new(stdout);
 		let mut terminal = Terminal::new(backend)?;
 		APP = App::initial();
-		let result = run_app(&mut terminal);
+		let result = run_app(&mut terminal).await;
 		disable_raw_mode()?;
-		execute!(
-			terminal.backend_mut(),
-			LeaveAlternateScreen,
-			DisableMouseCapture
-		)?;
+		execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 		terminal.show_cursor()?;
 		if let Err(err) = result {
 			println!("{}\n{:?}", strings::FATAL_RUNTIME_ERROR, err)
@@ -196,66 +221,75 @@ fn change_state(to: AppState) {
 }
 
 /// App's lifecycle loop
-fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
+async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	unsafe {
-		thread::spawn(move || loop {
-			let event = event::read();
-			if event.is_err() {
-				return;
-			}
-			if let Event::Key(key) = event.unwrap() {
-				match key.modifiers {
-					KeyModifiers::CONTROL => {
-						if key.code == KeyCode::Char('c') {
-							APP.requested_exit = true;
-							return;
-						}
+		async fn perform() {
+			unsafe {
+				loop {
+					let event = event::read();
+					if event.is_err() {
+						return;
 					}
-					_ => match key.code {
-						KeyCode::F(9) => {
-							APP.requested_exit = true;
-							return;
-						}
-						KeyCode::Up => {
-							if APP.input_focus <= 0 {
-								APP.input_focus = APP.max_input_focus
-							} else {
-								APP.input_focus -= 1
-							}
-						}
-						KeyCode::Down => {
-							if APP.input_focus >= APP.max_input_focus {
-								APP.input_focus = 0
-							} else {
-								APP.input_focus += 1
-							}
-						}
-						a @ _ => {
-							if APP.input_focus != 0 {
-								match a {
-									KeyCode::Char(c) => {
-										APP.inputs[(APP.input_focus - 1) as usize].push(c)
-									}
-									KeyCode::Backspace => {
-										(APP.inputs[(APP.input_focus - 1) as usize].pop());
-									}
-									KeyCode::Enter => {
-										if APP.state == AppState::Auth && APP.input_focus == 1 {
-											start_auth_job();
-										} else if let AppState::Chat(_) = APP.state {
-											unimplemented!()
-										};
-									}
-									_ => (),
+					if let Event::Key(key) = event.unwrap() {
+						match key.modifiers {
+							KeyModifiers::CONTROL => {
+								if key.code == KeyCode::Char('c') {
+									APP.requested_exit = true;
+									return;
 								}
 							}
+							_ => match key.code {
+								KeyCode::F(9) => {
+									APP.requested_exit = true;
+									return;
+								}
+								KeyCode::Up => {
+									if APP.input_focus <= 0 {
+										APP.input_focus = APP.max_input_focus
+									} else {
+										APP.input_focus -= 1
+									}
+								}
+								KeyCode::Down => {
+									if APP.input_focus >= APP.max_input_focus {
+										APP.input_focus = 0
+									} else {
+										APP.input_focus += 1
+									}
+								}
+								a @ _ => {
+									if APP.input_focus != 0 {
+										match a {
+											KeyCode::Char(c) => {
+												APP.inputs[(APP.input_focus - 1) as usize].push(c)
+											}
+											KeyCode::Backspace => {
+												(APP.inputs[(APP.input_focus - 1) as usize].pop());
+											}
+											KeyCode::Enter => {
+												if APP.state == AppState::Auth
+													&& APP.input_focus == 1
+												{
+													start_auth_job().await;
+												} else if let AppState::Chat(_) = APP.state {
+													unimplemented!()
+												};
+											}
+											_ => (),
+										}
+									}
+								}
+							},
 						}
-					},
+					}
 				}
 			}
-		});
+		}
+		tokio::spawn(perform());
+		// TODO:
+		// Is it ok that the interface is being updated all the time? I really don't know
 		loop {
-			thread::sleep(time::Duration::from_millis(150));
+			thread::sleep(time::Duration::from_millis(50));
 			if APP.requested_exit {
 				return Ok(());
 			}
@@ -274,27 +308,79 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	}
 }
 
-/// Change App's state to `Job` and begin authorization
-fn start_auth_job() {
+fn print_type_of<T>(_: &T) {
+	unsafe { APP.job_log_add(&format!("{}", std::any::type_name::<T>())) }
+}
+
+async fn ws_connect() {
 	unsafe {
-		change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
-		thread::spawn(move || {
-			APP.job_log_add(strings::JOB_STARTING);
-			thread::sleep(time::Duration::from_secs(5));
-			APP.job_log_add("Done.");
-			APP.job_progress_set(75);
-		});
+		println!("{}:{}", APP.server.root_url, APP.server.port);
+		let url =
+			url::Url::parse(&format!("ws://{}:{}", APP.server.root_url, APP.server.port)).unwrap();
+		let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+		print_type_of(&ws_stream)
 	}
+}
+
+/// Change App's state to `Job` and begin authorization
+async fn start_auth_job() {
+	#[tokio::main]
+	async fn perform() {
+		unsafe {
+			APP.job_log_add(strings::JOB_STARTING);
+			APP.job_log_add(strings::AUTH_JOB_PRECONNECT);
+			let res = reqwest::get(format!(
+				"http://{}/{}",
+				APP.server.root_url, "preconnect.php"
+			))
+			.await;
+			APP.job_progress_set(25);
+			// I'm EXTREMELY sorry but I slow things down purposefully just to enjoy the cool interfaces
+			//thread::sleep(time::Duration::from_millis(200));
+			if res.is_ok() {
+				APP.job_log_add(strings::JOB_SUCCESS);
+				let txt = res.unwrap().text().await;
+				if txt.is_ok() {
+					if txt.as_ref().unwrap() == "Ok" {
+						APP.job_log_add(strings::AUTH_JOB_PRECONNECT_SUCCESS);
+						ws_connect().await;
+					} else {
+						APP.job_log_add(&txt.unwrap());
+						APP.job_state_set(JobState::Err);
+						return;
+					}
+				} else {
+					APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_PARSE);
+					APP.job_state_set(JobState::Err);
+					return;
+				}
+			} else {
+				APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_GET);
+				APP.job_state_set(JobState::Err);
+				return;
+			}
+			APP.job_log_add("Done.");
+			APP.job_progress_set(100);
+		}
+	}
+	change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
+	thread::spawn(|| {
+		perform();
+	})
+	.join()
+	.expect("A");
 }
 
 /// Renders app's `Job` state UI
 fn job_ui<B: Backend>(f: &mut Frame<B>) {
 	unsafe {
-		if APP.typing_state_iteration >= 3 {
-			APP.typing_state_iteration = 0
-		} else {
-			APP.typing_state_iteration += 1
-		}
+		// TODO: Typing indicator
+		// if APP.typing_state_iteration >= 3 {
+		// 	APP.typing_state_iteration = 0
+		// } else {
+		// 	APP.typing_state_iteration += 1
+		// }
+		// ( .title(strings::MESSAGES_BLOCK_TYPING[APP.typing_state_iteration as usize]) )
 		match &APP.state {
 			AppState::Job(job) => {
 				let chunks = Layout::default()
@@ -305,10 +391,13 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 					.split(f.size());
 				let main_window = Block::default()
 					.borders(Borders::NONE)
-					//.title(job.title.clone())
-					.title(strings::MESSAGES_BLOCK_TYPING[APP.typing_state_iteration as usize])
+					.title(job.title.clone())
 					.title_alignment(Alignment::Center)
-					.style(Style::default().bg(Color::DarkGray));
+					.style(Style::default().bg(match job.state {
+						JobState::InProgress => Color::DarkGray,
+						JobState::Ok => Color::Green,
+						JobState::Err => Color::Red,
+					}));
 				f.render_widget(main_window, chunks[0]);
 				{
 					let chunks = Layout::default()
@@ -337,7 +426,7 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 						.iter()
 						.enumerate()
 						.map(|(i, m)| {
-							let content = vec![Spans::from(Span::raw(format!("{}. {}", i, m)))];
+							let content = vec![Spans::from(Span::raw(format!("{} {}", i + 1, m)))];
 							ListItem::new(content)
 						})
 						.collect();
@@ -353,8 +442,8 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 			}
 			_ => {
 				// TODO:
-				// This is very bad as it screws the terminal up. The good part is we'll hopefully never get here
-				process::exit(1);
+				// More descriptive errors (maybe)
+				panic!("{}", strings::FATAL_RUNTIME_ERROR);
 			}
 		}
 	}
@@ -378,11 +467,7 @@ fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 			.split(f.size());
 		let header = Paragraph::new(
 			strings::LOGO.to_owned()
-				+ &format!(
-					"v{} ({})",
-					env!("CARGO_PKG_VERSION"),
-					APP.server.server_name
-				),
+				+ &format!("v{} ({})", env!("CARGO_PKG_VERSION"), APP.server.name),
 		)
 		.style(if APP.input_focus == 0 {
 			Style::default().fg(Color::Cyan)
@@ -544,9 +629,7 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				}
 			}
 			_ => {
-				// TODO:
-				// This is very bad as it screws the terminal up. The good part is we'll hopefully never get here
-				process::exit(1);
+				panic!("{}", strings::FATAL_RUNTIME_ERROR);
 			}
 		}
 	}
