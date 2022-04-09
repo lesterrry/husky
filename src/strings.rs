@@ -20,6 +20,8 @@ pub const USAGE_INSTRUCTIONS: &str =
 [F9] / [CTRL + C] – Exit";
 
 pub const FATAL_RUNTIME_ERROR: &str = "Runtime error occured";
+pub const CONNECTION_DROPPED_ERROR: &str = "Websocket connection dropped";
+pub const MESSAGE_CORRUPTED_ERROR: &str = "Unable to read from connection stream";
 pub const USERNAME_BLOCK_INACTIVE: &str = " Username ";
 pub const USERNAME_BLOCK_ACTIVE: &str = " Username (ENTER to initiate tie) ";
 pub const AUTH_KEY_BLOCK_INACTIVE: &str = " Auth key ";
@@ -42,3 +44,5 @@ pub const AUTH_JOB_PRECONNECT_FAULT_PARSE: &str = "Unable to parse server respon
 pub const AUTH_JOB_PRECONNECT_FAULT_GET: &str = "Unable to get response from server";
 pub const AUTH_JOB_PRECONNECT_FAULT_DISAPPROVED: &str = "Connection not approved. Try again later";
 pub const AUTH_JOB_CONNECT_FAULT: &str = "Unable to create new connection";
+pub const AUTH_JOB_PAPERSHAVE: &str = "Sending auth data...";
+pub const COMMAND_PAPERSPLEASE: &str = "P";

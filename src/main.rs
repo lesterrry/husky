@@ -10,10 +10,9 @@ use crossterm::{
 	execute,
 	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use futures_util::StreamExt;
+use futures_util::{SinkExt, StreamExt};
 use reqwest;
 use std::{error::Error, io, panic, process, thread, time};
-use tokio::task;
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tui::{
 	backend::{Backend, CrosstermBackend},
@@ -166,7 +165,14 @@ impl App {
 				job.state = job_state;
 				self.state = AppState::Job(job)
 			}
-			_ => { /* TODO: Maybe panic? */ }
+			_ => {
+				self.state = AppState::Job(Job {
+					title: strings::FATAL_RUNTIME_ERROR.to_string(),
+					progress: 0,
+					state: JobState::Err,
+					log: Vec::new(),
+				})
+			}
 		}
 	}
 }
@@ -202,32 +208,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 	}
 }
 
-/// Switch App's state to a corresponding one and reset all associated variables
-fn change_state(to: AppState) {
-	unsafe {
-		match to.clone() {
-			AppState::Chat(mut a) => {
-				a.auth_key = APP.inputs[0].clone();
-				APP.max_input_focus = 3
-			}
-			AppState::Auth => APP.max_input_focus = 1,
-			_ => (),
-		}
-		APP.input_focus = 0;
-		APP.inputs = ["".to_string(), "".to_string(), "".to_string()];
-		APP.state = to;
-	}
-}
-
 /// App's lifecycle loop
 async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	unsafe {
 		async fn perform() {
 			unsafe {
 				loop {
-					if let AppState::Job(_) = APP.state {
-						continue;
-					}
 					let event = event::read();
 					if event.is_err() {
 						return;
@@ -298,7 +284,7 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 			match &APP.requested_job {
 				1 => {
 					APP.requested_job = 0;
-					start_auth_job().await
+					tokio::spawn(start_auth_job());
 				}
 				_ => (),
 			}
@@ -317,21 +303,65 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 	}
 }
 
-async fn handle_ws(with: WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>) {
+/// Switch App's state to a corresponding one and reset all associated variables
+fn set_state(to: AppState) {
 	unsafe {
-		let (write, read) = with.split();
+		match to.clone() {
+			AppState::Chat(mut a) => {
+				a.auth_key = APP.inputs[0].clone();
+				APP.max_input_focus = 3
+			}
+			AppState::Auth => APP.max_input_focus = 1,
+			_ => (),
+		}
+		APP.input_focus = 0;
+		APP.inputs = [String::new(), String::new(), String::new()];
+		APP.state = to;
+	}
+}
 
-		read.for_each(|message| async {
+/// Daemon for acting on every incoming message
+async fn read_ws(
+	with: futures_util::stream::SplitStream<
+		tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+	>,
+) {
+	unsafe {
+		with.for_each(|message| async {
 			match message {
 				Ok(ok) => match ok {
-					Message::Text(txt) => APP.job_log_add(&txt),
+					Message::Text(txt) => match &txt as &str {
+						strings::COMMAND_PAPERSPLEASE => {
+							if let AppState::Job(_) = APP.state {
+								APP.job_log_add(strings::AUTH_JOB_PAPERSHAVE);
+								APP.job_progress_set(75);
+							}
+						}
+						_ => APP.job_log_add(&txt),
+					},
 					_ => (),
 				},
-				Err(_) => APP.job_log_add("ERR"),
+				Err(_) => {
+					APP.job_state_set(JobState::Err);
+					APP.job_log_add(strings::MESSAGE_CORRUPTED_ERROR)
+				}
 			}
 		})
 		.await;
-		APP.job_log_add("Leaving loop-_-")
+		APP.job_state_set(JobState::Err);
+		APP.job_log_add(strings::CONNECTION_DROPPED_ERROR)
+	}
+}
+
+/// Daemon for sending messages from queue
+async fn write_ws(
+	mut with: futures_util::stream::SplitSink<
+		WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+		Message,
+	>,
+) {
+	unsafe {
+		with.send(Message::Text(APP.server.key.clone())).await;
 	}
 }
 
@@ -368,7 +398,7 @@ async fn start_auth_job() {
 			.await;
 			APP.job_progress_set(25);
 			// I'm EXTREMELY sorry but I slow things down purposefully just to enjoy the cool interfaces
-			thread::sleep(time::Duration::from_millis(200));
+			thread::sleep(time::Duration::from_millis(500));
 			if res.is_ok() {
 				APP.job_log_add(strings::JOB_SUCCESS);
 				let txt = res.unwrap().text().await;
@@ -383,7 +413,11 @@ async fn start_auth_job() {
 								APP.job_state_set(JobState::Err);
 								return;
 							}
-							Ok(ok) => tokio::spawn(handle_ws(ok)),
+							Ok(ok) => {
+								let (write, read) = ok.split();
+								tokio::spawn(read_ws(read));
+								tokio::spawn(write_ws(write));
+							}
 						};
 					} else {
 						APP.job_log_add(&txt.unwrap());
@@ -400,11 +434,9 @@ async fn start_auth_job() {
 				APP.job_state_set(JobState::Err);
 				return;
 			}
-			APP.job_log_add("Done.");
-			APP.job_progress_set(100);
 		}
 	}
-	change_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
+	set_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
 	perform().await;
 }
 
