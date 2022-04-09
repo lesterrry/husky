@@ -2,7 +2,8 @@
 <?php
 /*************************
 COPYRIGHT LESTER COVEY (me@lestercovey.ml) 
-AND MOROZOVSK (https://habr.com/ru/post/209864/)
+AND MOROZOVSK (https://habr.com/ru/post/209864/),
+2022
 
 *************************/
 
@@ -12,13 +13,17 @@ AND MOROZOVSK (https://habr.com/ru/post/209864/)
 // I'd like to make this thing capable of handling `wss` (with SSL).
 // I just don't know how.
 
-$socket = stream_socket_server("tcp://0.0.0.0:8000", $errno, $errstr);
+/// Define your local port to accept incoming connections into
+define("LOCALHOST_PORT", "tcp://0.0.0.0:8000");
+
+$socket = stream_socket_server(LOCALHOST_PORT, $errno, $errstr);
 
 if (!$socket) {
 	die("$errstr ($errno)\n");
 }
 
 $queue = array();
+$approved = array();
 while (true) {
 	$read = $queue;
 	$read [] = $socket;
@@ -33,15 +38,15 @@ while (true) {
 			$queue[] = $connect; // Adding connection to queue
 			on_open($connect, $info); // Responding
 		}
-		unset($read[ array_search($socket, $read) ]);
+		unset($read[array_search($socket, $read)]);
 	}
 
 	foreach($read as $connect) { // Handle each connection in queue
 		$data = fread($connect, 100000);
 
-		if (!$data) { // Connection closed
+		if (!strlen($data)) { // Connection closed
 			fclose($connect);
-			unset($queue[ array_search($connect, $queue) ]);
+			unset($queue[array_search($connect, $queue)]);
 			on_close($connect); // Handling connection closing
 			continue;
 		}
@@ -55,7 +60,7 @@ fclose($server);
 // Handling connection opening
 function on_open($connect, $info) {
 	echo "open\n";
-	fwrite($connect, encode('Привет'));
+	fwrite($connect, encode('P'));
 }
 
 // Handling connection closing
@@ -65,10 +70,19 @@ function on_close($connect) {
 
 // Handling incoming message
 function on_message($connect, $data) {
-	echo decode($data)['payload'] . "\n";
+	$txt = decode($data)['payload'];
+	switch ($txt[0]) {
+		case 'A':
+			echo("auth");
+			break;
+		default:
+			echo("unknown command: " . $txt . "\n");
+			break;
+	}
+	fwrite($connect, encode('YIP'));
 }
 
-// This is like quantum physics to me nvm.
+// This is like quantum physics to me nvm
 function handshake($connect) {
 	$info = array();
 
@@ -93,7 +107,7 @@ function handshake($connect) {
 		return false;
 	}
 
-	// FIXME:
+	// TODO:
 	// Uhhhhh is exposing this key ok? I have no idea.
 	$SecWebSocketAccept = base64_encode(pack('H*', sha1($info['Sec-WebSocket-Key'] . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')));
 	$upgrade = "HTTP/1.1 101 Web Socket Protocol Handshake\r\n" .
@@ -105,7 +119,7 @@ function handshake($connect) {
 	return $info;
 }
 
-// Ok if that one was quantum physics than this is some top-tier sorcery.
+// Ok if that one was quantum physics than this is some top-tier sorcery
 // (Comments are not mine)
 function encode($payload, $type = 'text', $masked = false)
 {
