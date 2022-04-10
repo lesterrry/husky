@@ -510,8 +510,12 @@ async unsafe fn read_ws(
 		}
 	})
 	.await;
-	APP.job_state_set(JobState::Err, true);
-	APP.job_log_add(CONNECTION_DROPPED_ERROR)
+	// TODO:
+	// This is from an earlier commit, is it ok?
+	if let AppState::Chat(_) = APP.state {
+		APP.job_state_set(JobState::Err, true);
+		APP.job_log_add(CONNECTION_DROPPED_ERROR)
+	}
 }
 
 /// Daemon for sending messages from queue
