@@ -43,6 +43,14 @@ pub const AUTH_JOB_PRECONNECT_SUCCESS: &str = "Connection approved";
 pub const AUTH_JOB_PRECONNECT_FAULT_PARSE: &str = "Unable to parse server response";
 pub const AUTH_JOB_PRECONNECT_FAULT_GET: &str = "Unable to get response from server";
 pub const AUTH_JOB_PRECONNECT_FAULT_DISAPPROVED: &str = "Connection not approved. Try again later";
-pub const AUTH_JOB_CONNECT_FAULT: &str = "Unable to create new connection";
-pub const AUTH_JOB_PAPERSHAVE: &str = "Sending auth data...";
-pub const COMMAND_PAPERSPLEASE: &str = "P";
+pub const AUTH_JOB_CONNECT: &str = "Connecting to socket...";
+pub const AUTH_JOB_CONNECT_AUTH: &str = "Sending auth data...";
+pub const AUTH_JOB_CONNECT_AUTH_AWAITING: &str = "Awaiting response...";
+pub const AUTH_JOB_CONNECT_AUTH_FAULT: &str = "Access denied";
+pub const AUTH_JOB_CONNECT_FAULT: &str = "Unable to communicate with socket";
+
+pub const TX_AUTH_FLAG: char = 'A';
+pub const TX_DROPME_FLAG: char = 'X';
+pub const RX_AUTH_OK_FLAG: char = 'O';
+pub const RX_AUTH_FAULT_FLAG: char = 'D';
+pub const RX_UNKNOWN_FLAG: char = 'U';

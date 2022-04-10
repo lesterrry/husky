@@ -37,14 +37,13 @@ enum AppState {
 enum ChatState {
 	Disconnected,
 	Connected(String),
-	Error(String),
 }
 
 #[derive(PartialEq, Clone)]
 enum JobState {
 	InProgress,
-	Ok,
-	Err,
+	Ok(Box<AppState>),
+	Err(Box<AppState>),
 }
 
 /// The job data is stored here. Job is a state when app is busy with something
@@ -75,15 +74,41 @@ impl Job {
 /// The chat data is stored here
 #[derive(PartialEq, Clone)]
 struct Chat {
-	auth_key: String,
 	state: ChatState,
 	messages: Vec<String>,
 	typing_state_iteration: u8,
 }
 
+impl Default for Chat {
+	fn default() -> Chat {
+		Chat {
+			state: ChatState::Disconnected,
+			messages: Vec::new(),
+			typing_state_iteration: 0,
+		}
+	}
+}
+
+/// The user's auth key data is stored here
+#[derive(PartialEq, Clone)]
+struct UserKey {
+	full: String,
+	username: String,
+}
+
+impl UserKey {
+	fn default(with_full: String) -> UserKey {
+		UserKey {
+			full: with_full.clone(),
+			username: with_full.split(":").collect::<Vec<&str>>()[0].to_string(),
+		}
+	}
+}
+
 /// The main application data is stored here
 struct App {
 	server: secure::Server,
+	user_key: Option<UserKey>,
 	inputs: [String; 3],
 	input_focus: u8,
 	max_input_focus: u8,
@@ -93,6 +118,9 @@ struct App {
 	// Oh this is the stupidest thing in this script
 	// I just couldn't figure out a way to tame all the async stuff otherwise
 	requested_job: u8,
+	sending_queue: Vec<String>,
+	sending_queue_sent: u8,
+	socket_handles: Option<(tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>)>,
 }
 
 impl App {
@@ -100,12 +128,16 @@ impl App {
 	fn initial() -> App {
 		App {
 			server: secure::Server::default(),
+			user_key: None,
 			inputs: ["".to_string(), "".to_string(), "".to_string()],
 			input_focus: 0,
 			max_input_focus: 1,
 			state: AppState::Auth,
 			requested_exit: false,
 			requested_job: 0,
+			sending_queue: Vec::new(),
+			sending_queue_sent: 0,
+			socket_handles: None,
 		}
 	}
 	// FIXME:
@@ -119,12 +151,16 @@ impl App {
 				port: String::new(),
 				name: String::new(),
 			},
+			user_key: None,
 			inputs: [String::new(), String::new(), String::new()],
 			input_focus: 0,
 			max_input_focus: 1,
 			state: AppState::Auth,
 			requested_exit: false,
 			requested_job: 0,
+			sending_queue: Vec::new(),
+			sending_queue_sent: 0,
+			socket_handles: None,
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
@@ -140,7 +176,6 @@ impl App {
 			_ => { /* TODO: Maybe panic? */ }
 		}
 	}
-
 	/// Change progress of App's job (if current state is `Job`, otherwise do nothing)
 	fn job_progress_set(&mut self, progress: u16) {
 		// FIXME:
@@ -154,9 +189,8 @@ impl App {
 			_ => { /* TODO: Maybe panic? */ }
 		}
 	}
-
 	/// Change state of App's job (if current state is `Job`, otherwise do nothing)
-	fn job_state_set(&mut self, job_state: JobState) {
+	fn job_state_set(&mut self, job_state: JobState, force: bool) {
 		// FIXME:
 		// This is imo the only 'real' *unsafe* part of the story
 		match &self.state {
@@ -165,14 +199,23 @@ impl App {
 				job.state = job_state;
 				self.state = AppState::Job(job)
 			}
-			_ => {
+			_ if force => {
 				self.state = AppState::Job(Job {
 					title: strings::FATAL_RUNTIME_ERROR.to_string(),
 					progress: 0,
-					state: JobState::Err,
+					state: JobState::Err(Box::new(AppState::Auth)),
 					log: Vec::new(),
 				})
 			}
+			_ => (),
+		}
+	}
+	/// Safely add text to App's sending queue
+	fn sending_queue_add(&mut self, msg: String) {
+		if self.sending_queue_sent >= 10 {
+			self.sending_queue = vec![msg]
+		} else {
+			self.sending_queue.push(msg)
 		}
 	}
 }
@@ -181,6 +224,12 @@ impl App {
 // I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrrr.
 /// The main global App instance, initialized as nullable
 static mut APP: App = App::null();
+
+#[allow(dead_code)]
+#[cfg(debug_assertions)]
+fn print_type_of<T>(_: &T) {
+	unsafe { APP.job_log_add(&format!("{}", std::any::type_name::<T>())) }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
@@ -204,7 +253,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 		if let Err(err) = result {
 			println!("{}\n{:?}", strings::FATAL_RUNTIME_ERROR, err)
 		}
-		Ok(())
+		process::exit(0);
 	}
 }
 
@@ -245,6 +294,19 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 										APP.input_focus += 1
 									}
 								}
+								KeyCode::Enter => {
+									if APP.state == AppState::Auth && APP.input_focus == 1 {
+										APP.requested_job = 1
+									} else if let AppState::Chat(_) = &APP.state {
+										unimplemented!()
+									} else if let AppState::Job(job) = &APP.state {
+										match &job.state {
+											JobState::InProgress => (),
+											JobState::Ok(ok) => set_state(*ok.clone()),
+											JobState::Err(err) => set_state(*err.clone()),
+										}
+									};
+								}
 								a @ _ => {
 									if APP.input_focus != 0 {
 										match a {
@@ -253,15 +315,6 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 											}
 											KeyCode::Backspace => {
 												(APP.inputs[(APP.input_focus - 1) as usize].pop());
-											}
-											KeyCode::Enter => {
-												if APP.state == AppState::Auth
-													&& APP.input_focus == 1
-												{
-													APP.requested_job = 1
-												} else if let AppState::Chat(_) = APP.state {
-													unimplemented!()
-												};
 											}
 											_ => (),
 										}
@@ -306,13 +359,17 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()> {
 /// Switch App's state to a corresponding one and reset all associated variables
 fn set_state(to: AppState) {
 	unsafe {
-		match to.clone() {
-			AppState::Chat(mut a) => {
-				a.auth_key = APP.inputs[0].clone();
-				APP.max_input_focus = 3
+		match &to {
+			AppState::Chat(_) => APP.max_input_focus = 3,
+			AppState::Auth => {
+				APP.sending_queue_add(strings::TX_DROPME_FLAG.to_string());
+				// if APP.socket_handles.is_some() {
+				// 	APP.socket_handles.as_ref().unwrap().0.abort();
+				// 	APP.socket_handles.as_ref().unwrap().1.abort();
+				// }
+				APP.max_input_focus = 1
 			}
-			AppState::Auth => APP.max_input_focus = 1,
-			_ => (),
+			_ => APP.max_input_focus = 1,
 		}
 		APP.input_focus = 0;
 		APP.inputs = [String::new(), String::new(), String::new()];
@@ -330,25 +387,43 @@ async fn read_ws(
 		with.for_each(|message| async {
 			match message {
 				Ok(ok) => match ok {
-					Message::Text(txt) => match &txt as &str {
-						strings::COMMAND_PAPERSPLEASE => {
-							if let AppState::Job(_) = APP.state {
-								APP.job_log_add(strings::AUTH_JOB_PAPERSHAVE);
-								APP.job_progress_set(75);
+					Message::Text(txt) => {
+						let chars = txt.chars();
+						let flag = chars.clone().collect::<Vec<char>>()[0] as char;
+						let _body: String = chars.skip(1).collect();
+						match flag {
+							strings::RX_AUTH_OK_FLAG => {
+								if let AppState::Job(_) = APP.state {
+									APP.job_log_add(strings::JOB_SUCCESS);
+									APP.job_progress_set(100);
+									APP.job_state_set(
+										JobState::Ok(Box::new(AppState::Chat(Chat::default()))),
+										false,
+									);
+								}
 							}
+							strings::RX_AUTH_FAULT_FLAG => {
+								if let AppState::Job(_) = APP.state {
+									APP.job_log_add(strings::AUTH_JOB_CONNECT_AUTH_FAULT);
+									APP.job_state_set(
+										JobState::Err(Box::new(AppState::Auth)),
+										false,
+									)
+								}
+							}
+							_ => APP.job_log_add(&txt),
 						}
-						_ => APP.job_log_add(&txt),
-					},
+					}
 					_ => (),
 				},
 				Err(_) => {
-					APP.job_state_set(JobState::Err);
+					APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 					APP.job_log_add(strings::MESSAGE_CORRUPTED_ERROR)
 				}
 			}
 		})
 		.await;
-		APP.job_state_set(JobState::Err);
+		APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 		APP.job_log_add(strings::CONNECTION_DROPPED_ERROR)
 	}
 }
@@ -361,17 +436,34 @@ async fn write_ws(
 	>,
 ) {
 	unsafe {
-		with.send(Message::Text(APP.server.key.clone())).await;
+		loop {
+			// TODO:
+			// Is sleeping a good idea?
+			thread::sleep(time::Duration::from_millis(100));
+			let mut sent: u8 = 0;
+			let app_sent = APP.sending_queue_sent;
+			if app_sent >= 10 {
+				APP.sending_queue_sent = 0
+			}
+			for i in &APP.sending_queue {
+				if sent < app_sent {
+					sent += 1;
+					continue;
+				}
+				with.send(Message::Text(i.to_string())).await;
+				if i == &strings::TX_DROPME_FLAG.to_string() {
+					APP.sending_queue = Vec::new();
+					APP.sending_queue_sent = 0;
+					return;
+				}
+				//APP.job_log_add(&format!("Will send. S={}, AS={}", sent, app_sent));
+				APP.sending_queue_sent += 1;
+			}
+		}
 	}
 }
 
-// TODO:
-// Remove on release
-#[allow(dead_code)]
-fn print_type_of<T>(_: &T) {
-	unsafe { APP.job_log_add(&format!("{}", std::any::type_name::<T>())) }
-}
-
+/// Make new connection and return a socket
 async fn ws_connect() -> Result<WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>, ()> {
 	unsafe {
 		let url =
@@ -387,57 +479,68 @@ async fn ws_connect() -> Result<WebSocketStream<MaybeTlsStream<tokio::net::TcpSt
 
 /// Change App's state to `Job` and begin authorization
 async fn start_auth_job() {
-	async fn perform() {
-		unsafe {
-			APP.job_log_add(strings::JOB_STARTING);
-			APP.job_log_add(strings::AUTH_JOB_PRECONNECT);
-			let res = reqwest::get(format!(
-				"http://{}/{}",
-				APP.server.root_url, "preconnect.php"
-			))
-			.await;
-			APP.job_progress_set(25);
-			// I'm EXTREMELY sorry but I slow things down purposefully just to enjoy the cool interfaces
-			thread::sleep(time::Duration::from_millis(500));
-			if res.is_ok() {
-				APP.job_log_add(strings::JOB_SUCCESS);
-				let txt = res.unwrap().text().await;
-				if txt.is_ok() {
-					if txt.as_ref().unwrap() == "Ok" {
-						APP.job_log_add(strings::AUTH_JOB_PRECONNECT_SUCCESS);
-						let connection = ws_connect().await;
-						APP.job_progress_set(50);
-						match connection {
-							Err(_) => {
-								APP.job_log_add(strings::AUTH_JOB_CONNECT_FAULT);
-								APP.job_state_set(JobState::Err);
-								return;
-							}
-							Ok(ok) => {
-								let (write, read) = ok.split();
-								tokio::spawn(read_ws(read));
-								tokio::spawn(write_ws(write));
-							}
-						};
-					} else {
-						APP.job_log_add(&txt.unwrap());
-						APP.job_state_set(JobState::Err);
-						return;
-					}
+	unsafe {
+		APP.user_key = Some(UserKey::default(APP.inputs[0].clone()));
+		set_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
+		APP.job_log_add(strings::JOB_STARTING);
+		APP.job_log_add(strings::AUTH_JOB_PRECONNECT);
+		let res = reqwest::get(format!(
+			"http://{}/{}",
+			APP.server.root_url, "preconnect.php"
+		))
+		.await;
+		APP.job_progress_set(25);
+		// I'm EXTREMELY sorry but I slow things down purposefully just to enjoy the cool interfaces
+		thread::sleep(time::Duration::from_millis(500));
+		if res.is_ok() {
+			APP.job_log_add(strings::JOB_SUCCESS);
+			let txt = res.unwrap().text().await;
+			if txt.is_ok() {
+				if txt.as_ref().unwrap() == "Ok" {
+					APP.job_log_add(strings::AUTH_JOB_PRECONNECT_SUCCESS);
+					APP.job_log_add(strings::AUTH_JOB_CONNECT);
+					APP.job_progress_set(50);
+					let connection = ws_connect().await;
+					APP.job_progress_set(70);
+					match connection {
+						Err(_) => {
+							APP.job_log_add(strings::AUTH_JOB_CONNECT_FAULT);
+							APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
+							return;
+						}
+						Ok(ok) => {
+							APP.job_log_add(strings::JOB_SUCCESS);
+							let (write, read) = ok.split();
+							let r = tokio::spawn(read_ws(read));
+							let w = tokio::spawn(write_ws(write));
+							APP.socket_handles = Some((w, r));
+							APP.job_progress_set(90);
+							APP.job_log_add(strings::AUTH_JOB_CONNECT_AUTH);
+							APP.sending_queue_add(format!(
+								"{}{}/{}",
+								strings::TX_AUTH_FLAG,
+								APP.server.key,
+								APP.user_key.clone().unwrap().full
+							));
+							APP.job_log_add(strings::AUTH_JOB_CONNECT_AUTH_AWAITING);
+						}
+					};
 				} else {
-					APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_PARSE);
-					APP.job_state_set(JobState::Err);
+					APP.job_log_add(&txt.unwrap());
+					APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 					return;
 				}
 			} else {
-				APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_GET);
-				APP.job_state_set(JobState::Err);
+				APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_PARSE);
+				APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 				return;
 			}
+		} else {
+			APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_GET);
+			APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
+			return;
 		}
 	}
-	set_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
-	perform().await;
 }
 
 /// Renders app's `Job` state UI
@@ -464,8 +567,8 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 					.title_alignment(Alignment::Center)
 					.style(Style::default().bg(match job.state {
 						JobState::InProgress => Color::DarkGray,
-						JobState::Ok => Color::Green,
-						JobState::Err => Color::Red,
+						JobState::Ok(_) => Color::Green,
+						JobState::Err(_) => Color::Red,
 					}));
 				f.render_widget(main_window, chunks[0]);
 				{
@@ -597,7 +700,6 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				let cs = match &chat.state {
 					ChatState::Disconnected => strings::CHAT_STATE_UNTIED.to_string(),
 					ChatState::Connected(a) => format!("{} {}", strings::CHAT_STATE_TIED_WITH, a),
-					ChatState::Error(a) => format!("{} {}", strings::CHAT_STATE_ERROR, a),
 				};
 				let hint = if APP.input_focus == 0 {
 					strings::CHAT_STATE_LOGOUT_PROMPT
@@ -607,7 +709,7 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				let header = Paragraph::new(format!(
 					"Husky v{} / {} / {}{}",
 					env!("CARGO_PKG_VERSION"),
-					chat.auth_key, /*app.auth_key.split(":").collect::<Vec<&str>>()[0]*/
+					APP.user_key.as_ref().unwrap().username,
 					cs,
 					hint
 				))
