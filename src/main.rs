@@ -4,6 +4,8 @@ COPYRIGHT LESTER COVEY (me@lestercovey.ml),
 
 ***************************/
 
+use crate::strings::flags::*;
+use crate::strings::ui::*;
 use chrono::Local;
 use crossterm::{
 	event::{self, Event, KeyCode, KeyModifiers},
@@ -190,7 +192,7 @@ impl App {
 		}
 	}
 	/// Change state of App's job (if current state is `Job`, otherwise do nothing)
-	fn job_state_set(&mut self, job_state: JobState, force: bool) {
+	fn job_state_set(&mut self, job_state: JobState, force_err: bool) {
 		// FIXME:
 		// This is imo the only 'real' *unsafe* part of the story
 		match &self.state {
@@ -199,9 +201,9 @@ impl App {
 				job.state = job_state;
 				self.state = AppState::Job(job)
 			}
-			_ if force => {
+			_ if force_err => {
 				self.state = AppState::Job(Job {
-					title: strings::FATAL_RUNTIME_ERROR.to_string(),
+					title: FATAL_RUNTIME_ERROR.to_string(),
 					progress: 0,
 					state: JobState::Err(Box::new(AppState::Auth)),
 					log: Vec::new(),
@@ -251,7 +253,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 		execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 		terminal.show_cursor()?;
 		if let Err(err) = result {
-			println!("{}\n{:?}", strings::FATAL_RUNTIME_ERROR, err)
+			println!("{}\n{:?}", FATAL_RUNTIME_ERROR, err)
 		}
 		process::exit(0);
 	}
@@ -362,7 +364,7 @@ fn set_state(to: AppState) {
 		match &to {
 			AppState::Chat(_) => APP.max_input_focus = 3,
 			AppState::Auth => {
-				APP.sending_queue_add(strings::TX_DROPME_FLAG.to_string());
+				APP.sending_queue_add(TX_DROPME_FLAG.to_string());
 				// if APP.socket_handles.is_some() {
 				// 	APP.socket_handles.as_ref().unwrap().0.abort();
 				// 	APP.socket_handles.as_ref().unwrap().1.abort();
@@ -392,9 +394,9 @@ async fn read_ws(
 						let flag = chars.clone().collect::<Vec<char>>()[0] as char;
 						let _body: String = chars.skip(1).collect();
 						match flag {
-							strings::RX_AUTH_OK_FLAG => {
+							RX_AUTH_OK_FLAG => {
 								if let AppState::Job(_) = APP.state {
-									APP.job_log_add(strings::JOB_SUCCESS);
+									APP.job_log_add(JOB_SUCCESS);
 									APP.job_progress_set(100);
 									APP.job_state_set(
 										JobState::Ok(Box::new(AppState::Chat(Chat::default()))),
@@ -402,14 +404,17 @@ async fn read_ws(
 									);
 								}
 							}
-							strings::RX_AUTH_FAULT_FLAG => {
+							RX_AUTH_FAULT_FLAG => {
 								if let AppState::Job(_) = APP.state {
-									APP.job_log_add(strings::AUTH_JOB_CONNECT_AUTH_FAULT);
+									APP.job_log_add(AUTH_JOB_CONNECT_AUTH_FAULT);
 									APP.job_state_set(
 										JobState::Err(Box::new(AppState::Auth)),
 										false,
 									)
 								}
+							}
+							RX_UNKNOWN_FLAG => {
+								panic!("{}", RX_UNKNOWN_ERROR);
 							}
 							_ => APP.job_log_add(&txt),
 						}
@@ -418,13 +423,13 @@ async fn read_ws(
 				},
 				Err(_) => {
 					APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
-					APP.job_log_add(strings::MESSAGE_CORRUPTED_ERROR)
+					APP.job_log_add(MESSAGE_CORRUPTED_ERROR)
 				}
 			}
 		})
 		.await;
 		APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
-		APP.job_log_add(strings::CONNECTION_DROPPED_ERROR)
+		APP.job_log_add(CONNECTION_DROPPED_ERROR)
 	}
 }
 
@@ -450,8 +455,11 @@ async fn write_ws(
 					sent += 1;
 					continue;
 				}
-				with.send(Message::Text(i.to_string())).await;
-				if i == &strings::TX_DROPME_FLAG.to_string() {
+				if with.send(Message::Text(i.to_string())).await.is_err() {
+					APP.job_log_add(AUTH_JOB_CONNECT_FAULT);
+					APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
+				}
+				if i == &TX_DROPME_FLAG.to_string() {
 					APP.sending_queue = Vec::new();
 					APP.sending_queue_sent = 0;
 					return;
@@ -481,9 +489,9 @@ async fn ws_connect() -> Result<WebSocketStream<MaybeTlsStream<tokio::net::TcpSt
 async fn start_auth_job() {
 	unsafe {
 		APP.user_key = Some(UserKey::default(APP.inputs[0].clone()));
-		set_state(AppState::Job(Job::default(strings::AUTH_JOB.to_string())));
-		APP.job_log_add(strings::JOB_STARTING);
-		APP.job_log_add(strings::AUTH_JOB_PRECONNECT);
+		set_state(AppState::Job(Job::default(AUTH_JOB.to_string())));
+		APP.job_log_add(JOB_STARTING);
+		APP.job_log_add(AUTH_JOB_PRECONNECT);
 		let res = reqwest::get(format!(
 			"http://{}/{}",
 			APP.server.root_url, "preconnect.php"
@@ -493,50 +501,49 @@ async fn start_auth_job() {
 		// I'm EXTREMELY sorry but I slow things down purposefully just to enjoy the cool interfaces
 		thread::sleep(time::Duration::from_millis(500));
 		if res.is_ok() {
-			APP.job_log_add(strings::JOB_SUCCESS);
+			APP.job_log_add(JOB_SUCCESS);
 			let txt = res.unwrap().text().await;
 			if txt.is_ok() {
 				if txt.as_ref().unwrap() == "Ok" {
-					APP.job_log_add(strings::AUTH_JOB_PRECONNECT_SUCCESS);
-					APP.job_log_add(strings::AUTH_JOB_CONNECT);
+					APP.job_log_add(AUTH_JOB_CONNECT);
 					APP.job_progress_set(50);
 					let connection = ws_connect().await;
 					APP.job_progress_set(70);
 					match connection {
 						Err(_) => {
-							APP.job_log_add(strings::AUTH_JOB_CONNECT_FAULT);
+							APP.job_log_add(AUTH_JOB_CONNECT_FAULT);
 							APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 							return;
 						}
 						Ok(ok) => {
-							APP.job_log_add(strings::JOB_SUCCESS);
+							APP.job_log_add(JOB_SUCCESS);
 							let (write, read) = ok.split();
 							let r = tokio::spawn(read_ws(read));
 							let w = tokio::spawn(write_ws(write));
 							APP.socket_handles = Some((w, r));
 							APP.job_progress_set(90);
-							APP.job_log_add(strings::AUTH_JOB_CONNECT_AUTH);
+							APP.job_log_add(AUTH_JOB_CONNECT_AUTH);
 							APP.sending_queue_add(format!(
 								"{}{}/{}",
-								strings::TX_AUTH_FLAG,
+								TX_AUTH_FLAG,
 								APP.server.key,
 								APP.user_key.clone().unwrap().full
 							));
-							APP.job_log_add(strings::AUTH_JOB_CONNECT_AUTH_AWAITING);
+							APP.job_log_add(AUTH_JOB_CONNECT_AUTH_AWAITING);
 						}
 					};
 				} else {
-					APP.job_log_add(&txt.unwrap());
+					APP.job_log_add(AUTH_JOB_PRECONNECT_FAULT_DISAPPROVED);
 					APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 					return;
 				}
 			} else {
-				APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_PARSE);
+				APP.job_log_add(AUTH_JOB_PRECONNECT_FAULT_PARSE);
 				APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 				return;
 			}
 		} else {
-			APP.job_log_add(strings::AUTH_JOB_PRECONNECT_FAULT_GET);
+			APP.job_log_add(AUTH_JOB_PRECONNECT_FAULT_GET);
 			APP.job_state_set(JobState::Err(Box::new(AppState::Auth)), false);
 			return;
 		}
@@ -563,7 +570,10 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 					.split(f.size());
 				let main_window = Block::default()
 					.borders(Borders::NONE)
-					.title(job.title.clone())
+					.title(match job.state {
+						JobState::InProgress => job.title.clone(),
+						_ => format!("{} ({})", job.title.clone(), PROMPT),
+					})
 					.title_alignment(Alignment::Center)
 					.style(Style::default().bg(match job.state {
 						JobState::InProgress => Color::DarkGray,
@@ -597,8 +607,8 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 						.log
 						.iter()
 						.enumerate()
-						.map(|(i, m)| {
-							let content = vec![Spans::from(Span::raw(format!("{} {}", i + 1, m)))];
+						.map(|(_, m)| {
+							let content = vec![Spans::from(Span::raw(m))];
 							ListItem::new(content)
 						})
 						.collect();
@@ -606,7 +616,7 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 						Block::default()
 							.borders(Borders::ALL)
 							.style(Style::default().fg(Color::White))
-							.title(strings::LOG_BLOCK)
+							.title(LOG_BLOCK)
 							.title_alignment(Alignment::Center),
 					);
 					f.render_widget(log, chunks[1]);
@@ -615,7 +625,7 @@ fn job_ui<B: Backend>(f: &mut Frame<B>) {
 			_ => {
 				// TODO:
 				// More descriptive errors (maybe)
-				panic!("{}", strings::FATAL_RUNTIME_ERROR);
+				panic!("{}", FATAL_RUNTIME_ERROR);
 			}
 		}
 	}
@@ -637,10 +647,12 @@ fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 				.as_ref(),
 			)
 			.split(f.size());
-		let header = Paragraph::new(
-			strings::LOGO.to_owned()
-				+ &format!("v{} ({})", env!("CARGO_PKG_VERSION"), APP.server.name),
-		)
+		let header = Paragraph::new(format!(
+			"{}v{} ({})",
+			LOGO,
+			env!("CARGO_PKG_VERSION"),
+			APP.server.name
+		))
 		.style(if APP.input_focus == 0 {
 			Style::default().fg(Color::Cyan)
 		} else {
@@ -657,9 +669,9 @@ fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 				Block::default()
 					.borders(Borders::ALL)
 					.title(if APP.input_focus == 1 {
-						strings::AUTH_KEY_BLOCK_ACTIVE
+						AUTH_KEY_BLOCK_ACTIVE
 					} else {
-						strings::AUTH_KEY_BLOCK_INACTIVE
+						AUTH_KEY_BLOCK_INACTIVE
 					})
 					.border_type(if APP.input_focus == 1 {
 						BorderType::Thick
@@ -668,7 +680,7 @@ fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 					}),
 			);
 		f.render_widget(input.clone(), chunks[1]);
-		let instructions = Paragraph::new(strings::USAGE_INSTRUCTIONS);
+		let instructions = Paragraph::new(USAGE_INSTRUCTIONS);
 		f.render_widget(instructions, chunks[3]);
 		if APP.input_focus == 1 {
 			f.set_cursor(
@@ -698,11 +710,11 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 					)
 					.split(f.size());
 				let cs = match &chat.state {
-					ChatState::Disconnected => strings::CHAT_STATE_UNTIED.to_string(),
-					ChatState::Connected(a) => format!("{} {}", strings::CHAT_STATE_TIED_WITH, a),
+					ChatState::Disconnected => CHAT_STATE_UNTIED.to_string(),
+					ChatState::Connected(a) => format!("{} {}", CHAT_STATE_TIED_WITH, a),
 				};
 				let hint = if APP.input_focus == 0 {
-					strings::CHAT_STATE_LOGOUT_PROMPT
+					CHAT_STATE_LOGOUT_PROMPT
 				} else {
 					""
 				};
@@ -728,8 +740,8 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 						Block::default()
 							.borders(Borders::ALL)
 							.title(match APP.input_focus {
-								1 => strings::USERNAME_BLOCK_ACTIVE,
-								_ => strings::USERNAME_BLOCK_INACTIVE,
+								1 => USERNAME_BLOCK_ACTIVE,
+								_ => USERNAME_BLOCK_INACTIVE,
 							})
 							.border_type(match APP.input_focus {
 								1 => BorderType::Thick,
@@ -745,7 +757,7 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 					.block(
 						Block::default()
 							.borders(Borders::ALL)
-							.title(strings::ENCRYPTION_KEY_BLOCK)
+							.title(ENCRYPTION_KEY_BLOCK)
 							.border_type(match APP.input_focus {
 								2 => BorderType::Thick,
 								_ => BorderType::Double,
@@ -776,8 +788,8 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 						Block::default()
 							.borders(Borders::ALL)
 							.title(match APP.input_focus {
-								3 => strings::NEW_MESSAGE_BLOCK_ACTIVE,
-								_ => strings::NEW_MESSAGE_BLOCK_INACTIVE,
+								3 => NEW_MESSAGE_BLOCK_ACTIVE,
+								_ => NEW_MESSAGE_BLOCK_INACTIVE,
 							})
 							.border_type(match APP.input_focus {
 								3 => BorderType::Thick,
@@ -800,7 +812,7 @@ fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				}
 			}
 			_ => {
-				panic!("{}", strings::FATAL_RUNTIME_ERROR);
+				panic!("{}", FATAL_RUNTIME_ERROR);
 			}
 		}
 	}

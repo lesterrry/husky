@@ -5,52 +5,100 @@ COPYRIGHT LESTER COVEY (me@lestercovey.ml),
 ***************************/
 
 #[rustfmt::skip]
-pub const LOGO: &str = 
-"   __            __       
-  / /  __ _____ / /____ __
- / _ \\/ // (_-</  '_/ // /
-/_//_/\\_,_/___/_/\\_\\\\_, / 
-                   /___/  ";
+#[allow(dead_code)]
+pub mod ui {
+	pub const LOGO: &str = 
+	"   __            __       
+	  / /  __ _____ / /____ __
+	 / _ \\/ // (_-</  '_/ // /
+	/_//_/\\_,_/___/_/\\_\\\\_, / 
+	                   /___/  ";
+
+	pub const USAGE_INSTRUCTIONS: &str = 
+	"USAGE INSTRUCTIONS:
+	[ARROW UP] / [ARROW DOWN] – Switch between active input blocks
+	[ENTER] – Submit input
+	[F9] / [CTRL + C] – Exit";
+
+	pub const FATAL_RUNTIME_ERROR: 
+		&str = "Runtime error occured";
+	pub const CONNECTION_DROPPED_ERROR: 
+		&str = "Websocket connection dropped";
+	pub const MESSAGE_CORRUPTED_ERROR: 
+		&str = "Unable to read from connection stream";
+	pub const RX_UNKNOWN_ERROR: 
+		&str = "Recieved unknown command flag";
+	pub const USERNAME_BLOCK_INACTIVE: 
+		&str = " Username ";
+	pub const USERNAME_BLOCK_ACTIVE: 
+		&str = " Username (ENTER to initiate tie) ";
+	pub const AUTH_KEY_BLOCK_INACTIVE: 
+		&str = " Auth key ";
+	pub const AUTH_KEY_BLOCK_ACTIVE: 
+		&str = " Auth key (ENTER to submit) ";
+	pub const MESSAGES_BLOCK_TYPING: 
+		[&str; 4] = ["Typing   ", "Typing.  ", "Typing.. ", "Typing..."];
+	pub const NEW_MESSAGE_BLOCK_INACTIVE:	
+		&str = " Message ";
+	pub const NEW_MESSAGE_BLOCK_ACTIVE: 
+		&str = " Message (ENTER to send) ";
+	pub const ENCRYPTION_KEY_BLOCK: 
+		&str = " Encryption key ";
+	pub const CHAT_STATE_UNTIED: 
+		&str = "Untied";
+	pub const CHAT_STATE_TIED_WITH: 
+		&str = "Tied with";
+	pub const CHAT_STATE_ERROR: 
+		&str = "Error";
+	pub const CHAT_STATE_LOGOUT_PROMPT: 
+		&str = " / ENTER to Log out";
+	pub const PROMPT: 
+		&str = "ENTER to continue";
+	pub const LOG_BLOCK: 
+		&str = " Progress log ";
+	pub const JOB_STARTING: 
+		&str = "Starting...";
+	pub const JOB_SUCCESS: 
+		&str = "SUCCESS";
+	pub const AUTH_JOB: 
+		&str = "Authorizing...";
+	pub const AUTH_JOB_PRECONNECT: 
+		&str = "Reaching server...";
+	pub const AUTH_JOB_PRECONNECT_FAULT_PARSE: 
+		&str = "FAULT: Unable to parse server response";
+	pub const AUTH_JOB_PRECONNECT_FAULT_GET: 
+		&str = "FAULT: Unable to get response from server";
+	pub const AUTH_JOB_PRECONNECT_FAULT_DISAPPROVED: 
+		&str = "FAULT: Connection not approved. Try again later";
+	pub const AUTH_JOB_CONNECT: 
+		&str = "Connecting to socket...";
+	pub const AUTH_JOB_CONNECT_AUTH: 
+		&str = "Sending auth data...";
+	pub const AUTH_JOB_CONNECT_AUTH_AWAITING: 
+		&str = "Awaiting response...";
+	pub const AUTH_JOB_CONNECT_AUTH_FAULT: 
+		&str = "FAULT: Access denied";
+	pub const AUTH_JOB_CONNECT_FAULT: 
+		&str = "FAULT: Unable to communicate with socket";
+}
 
 #[rustfmt::skip]
-pub const USAGE_INSTRUCTIONS: &str = 
-"USAGE INSTRUCTIONS:
-[ARROW UP] / [ARROW DOWN] – Switch between active input blocks
-[ENTER] – Submit input
-[F9] / [CTRL + C] – Exit";
-
-pub const FATAL_RUNTIME_ERROR: &str = "Runtime error occured";
-pub const CONNECTION_DROPPED_ERROR: &str = "Websocket connection dropped";
-pub const MESSAGE_CORRUPTED_ERROR: &str = "Unable to read from connection stream";
-pub const USERNAME_BLOCK_INACTIVE: &str = " Username ";
-pub const USERNAME_BLOCK_ACTIVE: &str = " Username (ENTER to initiate tie) ";
-pub const AUTH_KEY_BLOCK_INACTIVE: &str = " Auth key ";
-pub const AUTH_KEY_BLOCK_ACTIVE: &str = " Auth key (ENTER to submit) ";
-pub const MESSAGES_BLOCK_TYPING: [&str; 4] = ["Typing   ", "Typing.  ", "Typing.. ", "Typing..."];
-pub const NEW_MESSAGE_BLOCK_INACTIVE: &str = " Message ";
-pub const NEW_MESSAGE_BLOCK_ACTIVE: &str = " Message (ENTER to send) ";
-pub const ENCRYPTION_KEY_BLOCK: &str = " Encryption key ";
-pub const CHAT_STATE_UNTIED: &str = "Untied";
-pub const CHAT_STATE_TIED_WITH: &str = "Tied with";
-pub const CHAT_STATE_ERROR: &str = "Error";
-pub const CHAT_STATE_LOGOUT_PROMPT: &str = " / ENTER to Log out";
-pub const LOG_BLOCK: &str = " Progress log ";
-pub const JOB_STARTING: &str = "Starting...";
-pub const JOB_SUCCESS: &str = "SUCCESS";
-pub const AUTH_JOB: &str = "Authorizing...";
-pub const AUTH_JOB_PRECONNECT: &str = "Reaching server...";
-pub const AUTH_JOB_PRECONNECT_SUCCESS: &str = "Connection approved";
-pub const AUTH_JOB_PRECONNECT_FAULT_PARSE: &str = "Unable to parse server response";
-pub const AUTH_JOB_PRECONNECT_FAULT_GET: &str = "Unable to get response from server";
-pub const AUTH_JOB_PRECONNECT_FAULT_DISAPPROVED: &str = "Connection not approved. Try again later";
-pub const AUTH_JOB_CONNECT: &str = "Connecting to socket...";
-pub const AUTH_JOB_CONNECT_AUTH: &str = "Sending auth data...";
-pub const AUTH_JOB_CONNECT_AUTH_AWAITING: &str = "Awaiting response...";
-pub const AUTH_JOB_CONNECT_AUTH_FAULT: &str = "Access denied";
-pub const AUTH_JOB_CONNECT_FAULT: &str = "Unable to communicate with socket";
-
-pub const TX_AUTH_FLAG: char = 'A';
-pub const TX_DROPME_FLAG: char = 'X';
-pub const RX_AUTH_OK_FLAG: char = 'O';
-pub const RX_AUTH_FAULT_FLAG: char = 'D';
-pub const RX_UNKNOWN_FLAG: char = 'U';
+#[allow(dead_code)]
+pub mod flags {
+	pub const TX_AUTH_FLAG: 
+		char = 'A';
+	pub const TX_DROPME_FLAG: 
+		char = 'X';
+	pub const TX_TIE_INIT_FLAG: 
+		char = 'T';
+	pub const RX_AUTH_OK_FLAG: 
+		char = 'O';
+	pub const RX_AUTH_FAULT_FLAG: 
+		char = 'D';
+	pub const RX_TIE_OK_FLAG:
+		char = 'S';
+	pub const RX_TIE_FAULT_NOUSER_FLAG:
+		char = 'N';
+	pub const RX_UNKNOWN_FLAG: 
+		char = 'U';
+}
