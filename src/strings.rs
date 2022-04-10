@@ -52,10 +52,14 @@ pub mod ui {
 		&str = "Error";
 	pub const CHAT_STATE_LOGOUT_PROMPT: 
 		&str = " / ENTER to Log out";
+	pub const CHAT_STATE_UNTIE_PROMPT: 
+		&str = " / ENTER to Untie";
 	pub const PROMPT: 
-		&str = "ENTER to continue";
+		&str = "[ ENTER to continue ]";
 	pub const LOG_BLOCK: 
 		&str = " Progress log ";
+	pub const TIE_BROKEN:
+		&str = "Tie broken";
 	pub const JOB_STARTING: 
 		&str = "Starting...";
 	pub const JOB_SUCCESS: 
@@ -80,6 +84,14 @@ pub mod ui {
 		&str = "FAULT: Access denied";
 	pub const AUTH_JOB_CONNECT_FAULT: 
 		&str = "FAULT: Unable to communicate with socket";
+	pub const TIE_JOB:
+		&str = "Tying...";
+	pub const TIE_JOB_WITH:
+		&str = "Tying with";
+	pub const TIE_JOB_AWAITING:
+		&str = "Waiting for subject to connect...";
+	pub const TIE_JOB_FAULT_NOUSER:
+		&str = "FAULT: This user does not exist";
 }
 
 #[rustfmt::skip]
@@ -97,8 +109,14 @@ pub mod flags {
 		char = 'D';
 	pub const RX_TIE_OK_FLAG:
 		char = 'S';
+	pub const RX_TIE_OK_WAIT_FLAG:
+		char = 'W';
 	pub const RX_TIE_FAULT_NOUSER_FLAG:
 		char = 'N';
+	pub const RXTX_UNTIE_FLAG:
+		char = 'C';
+	pub const RXTX_OK_FLAG:
+		char = 'Y';
 	pub const RX_UNKNOWN_FLAG: 
 		char = 'U';
 }

@@ -22,8 +22,14 @@ require __DIR__ . "/secure.php";
 
 define("RX_AUTH_FLAG", "A");
 define("RX_DROPME_FLAG", "X");
+define("RX_TIE_INIT_FLAG", "T");
 define("TX_AUTH_OK_FLAG", "O");
 define("TX_AUTH_FAULT_FLAG", "D");
+define("TX_TIE_OK_FLAG", "S");
+define("TX_TIE_OK_WAIT_FLAG", "W");
+define("TX_TIE_FAULT_NOUSER_FLAG", "N");
+define("RXTX_UNTIE_FLAG", "C");
+define("RXTX_OK_FLAG", "Y");
 define("TX_UNKNOWN_FLAG", "U");
 
 $socket = stream_socket_server(LOCALHOST_PORT, $errno, $errstr);
@@ -34,6 +40,8 @@ if (!$socket) {
 
 $queue = array();
 $approved = array();
+$waitlist = array();
+$ties = array();
 
 while (true) {
 	$read = $queue;
@@ -73,6 +81,7 @@ function on_close($connect) {
 
 // Handling incoming message
 function on_message($connect, $data) {
+	global $approved, $waitlist, $ties;
 	$response = TX_UNKNOWN_FLAG;
 	$txt = decode($data)['payload'];
 	$flag = $txt[0];
@@ -85,15 +94,58 @@ function on_message($connect, $data) {
 		unset($body);
 		$user_key = $body_exp[1];
 			if ($access_key == ACCESS_KEY && in_array($user_key, USER_KEYS)) {
+				$user_name = explode(':', $user_key);
+				$approved[$user_name[0]] = $connect;
 				$response = TX_AUTH_OK_FLAG;
 			} else {
 				$response = TX_AUTH_FAULT_FLAG;
 			}
 			break;
 		case RX_DROPME_FLAG:
-			echo("dropping");
 			conn_close($connect);
 			return;
+		case RX_TIE_INIT_FLAG:
+			if (in_array($connect, $approved)) {
+				if (in_array($body, USER_NAMES)) {
+					$user_name = array_search($connect, $approved);
+					if ($waitlist[$body] === $user_name) {
+						$response = TX_TIE_OK_FLAG;
+						$ties[$body] = $user_name;
+						unset($waitlist[$body]);
+						fwrite($approved[$body], encode($response));
+					} else {
+						$response = TX_TIE_OK_WAIT_FLAG;
+						$waitlist[$user_name] = $body;
+					}
+				} else {
+					$response = TX_TIE_FAULT_NOUSER_FLAG;
+				}
+			} else {
+				conn_close($connect);
+				return;
+			}
+			break;
+		case RXTX_UNTIE_FLAG:
+			if (in_array($connect, $approved)) {
+				$user_name = array_search($connect, $approved);
+				if (array_key_exists($user_name, $ties)) {
+					$response = RXTX_OK_FLAG;
+					fwrite($approved[$ties[$user_name]], encode(RXTX_UNTIE_FLAG));
+					unset($ties[$user_name]);
+				} else if (in_array($user_name, $ties)) {
+					$response = RXTX_OK_FLAG;
+					$needle = array_search($user_name, $ties);
+					fwrite($approved[$needle], encode(RXTX_UNTIE_FLAG));
+					unset($ties[$needle]);
+				} else if (array_key_exists($user_name, $waitlist)) {
+					$response = RXTX_OK_FLAG;
+					unset($waitlist[$user_name]);
+				}
+			} else {
+				conn_close($connect);
+				return;
+			}
+			break;
 		default:
 			echo("unknown command: " . $txt . "\n");
 			break;
@@ -103,10 +155,20 @@ function on_message($connect, $data) {
 
 // Dropping the connection
 function conn_close($conn) {
-	global $queue;
+	global $queue, $approved, $waitlist;
+	// var_dump($queue);
+	// var_dump($approved);
+	// var_dump($waitlist);
+	// echo("CLOSING...\n");
 	fclose($conn);
 	unset($queue[array_search($conn, $queue)]);
+	$needle = array_search($conn, $approved);
+	if (in_array($conn, $approved)) { unset($approved[$needle]); }
+	if (array_key_exists($needle, $waitlist)) { unset($waitlist[$needle]); }
 	on_close($conn); // Handling connection closing
+	// var_dump($queue);
+	// var_dump($approved);
+	// var_dump($waitlist);
 }
 
 // This is like quantum physics to me nvm
