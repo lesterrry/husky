@@ -86,6 +86,7 @@ function on_message($connect, $data) {
 	$txt = decode($data)['payload'];
 	$flag = $txt[0];
 	$body = substr($txt, 1);
+	echo($txt . "\n");
 	unset($txt);
 	switch ($flag) {
 		case RX_AUTH_FLAG:

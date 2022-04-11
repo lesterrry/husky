@@ -41,11 +41,20 @@ enum ChatState {
 	Tied(String),
 }
 
+// TODO:
+// So if I just use `AppState` as a `JobState`'s associated value
+// everything falls apart bc of recursion
+#[derive(PartialEq, Clone)]
+enum JobSwitchAppState {
+	Auth,
+	Chat(Chat),
+}
+
 #[derive(PartialEq, Clone)]
 enum JobState {
 	InProgress,
-	Ok,
-	Err,
+	Ok(JobSwitchAppState),
+	Err(JobSwitchAppState),
 }
 
 /// The job data is stored here. Job is a state when app is busy with something
@@ -133,7 +142,7 @@ struct App {
 	requested_job: u8,
 	sending_queue: Vec<String>,
 	sending_queue_sent: u8,
-	socket_handles: Option<(tokio::task::JoinHandle<()>, tokio::task::JoinHandle<()>)>,
+	writer_exists: bool,
 }
 
 impl App {
@@ -150,7 +159,7 @@ impl App {
 			requested_job: 0,
 			sending_queue: Vec::new(),
 			sending_queue_sent: 0,
-			socket_handles: None,
+			writer_exists: false,
 		}
 	}
 	// FIXME:
@@ -173,7 +182,7 @@ impl App {
 			requested_job: 0,
 			sending_queue: Vec::new(),
 			sending_queue_sent: 0,
-			socket_handles: None,
+			writer_exists: false,
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
@@ -324,17 +333,12 @@ async unsafe fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()
 							} else if let AppState::Job(job) = &APP.state {
 								match &job.state {
 									JobState::InProgress => (),
-									JobState::Ok => {
-										//set_state(*ok.clone());
-										// FIXME:
-										// Oh I know I know...
-										// W/o these we sometimes get corrupt mem
-										thread::sleep(time::Duration::from_millis(200));
+									JobState::Ok(ok) => {
+										set_state_using_switch(ok.clone());
 										continue;
 									}
-									JobState::Err => {
-										//set_state(*err.clone());
-										thread::sleep(time::Duration::from_millis(200));
+									JobState::Err(err) => {
+										set_state_using_switch(err.clone());
 										continue;
 									}
 								}
@@ -398,7 +402,9 @@ unsafe fn set_state(to: AppState) {
 	match &to {
 		AppState::Chat(_) => APP.max_input_focus = 3,
 		AppState::Auth => {
-			APP.sending_queue_add(TX_DROPME_FLAG.to_string());
+			if APP.writer_exists {
+				APP.sending_queue_add(TX_DROPME_FLAG.to_string())
+			}
 			// if APP.socket_handles.is_some() {
 			// 	APP.socket_handles.as_ref().unwrap().0.abort();
 			// 	APP.socket_handles.as_ref().unwrap().1.abort();
@@ -410,6 +416,25 @@ unsafe fn set_state(to: AppState) {
 	APP.input_focus = 0;
 	APP.inputs = [String::new(), String::new(), String::new()];
 	APP.state = to;
+}
+
+/// Switch App's state to a corresponding one (from Job) and reset all associated variables
+unsafe fn set_state_using_switch(to: JobSwitchAppState) {
+	match &to {
+		JobSwitchAppState::Chat(chat) => {
+			APP.max_input_focus = 3;
+			APP.state = AppState::Chat(chat.to_owned());
+		}
+		JobSwitchAppState::Auth => {
+			if APP.writer_exists {
+				APP.sending_queue_add(TX_DROPME_FLAG.to_string())
+			}
+			APP.max_input_focus = 1;
+			APP.state = AppState::Auth;
+		}
+	}
+	APP.input_focus = 0;
+	APP.inputs = [String::new(), String::new(), String::new()];
 }
 
 /// Daemon for acting on every incoming message
@@ -431,7 +456,10 @@ async unsafe fn read_ws(
 								if job.title == AUTH_JOB {
 									APP.job_log_add(JOB_SUCCESS);
 									APP.job_progress_set(100);
-									APP.job_state_set(JobState::Ok, false);
+									APP.job_state_set(
+										JobState::Ok(JobSwitchAppState::Chat(Chat::default())),
+										false,
+									);
 								} else {
 									// TODO:
 									// Panic?
@@ -442,7 +470,7 @@ async unsafe fn read_ws(
 							if let AppState::Job(job) = &APP.state {
 								if job.title == AUTH_JOB {
 									APP.job_log_add(AUTH_JOB_CONNECT_AUTH_FAULT);
-									APP.job_state_set(JobState::Err, false)
+									APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false)
 								} else {
 									// TODO:
 									// Panic?
@@ -455,7 +483,12 @@ async unsafe fn read_ws(
 									let subject = job.data[0].to_string();
 									APP.job_log_add(JOB_SUCCESS);
 									APP.job_progress_set(100);
-									APP.job_state_set(JobState::Ok, false);
+									APP.job_state_set(
+										JobState::Ok(JobSwitchAppState::Chat(Chat::with_subject(
+											subject,
+										))),
+										false,
+									);
 								} else {
 									// TODO:
 									// Panic?
@@ -477,7 +510,10 @@ async unsafe fn read_ws(
 							if let AppState::Job(job) = &APP.state {
 								if job.title == TIE_JOB {
 									APP.job_log_add(TIE_JOB_FAULT_NOUSER);
-									APP.job_state_set(JobState::Err, false)
+									APP.job_state_set(
+										JobState::Err(JobSwitchAppState::Chat(Chat::default())),
+										false,
+									)
 								} else {
 									// TODO:
 									// Panic?
@@ -487,7 +523,10 @@ async unsafe fn read_ws(
 						RXTX_UNTIE_FLAG => {
 							if let AppState::Chat(chat) = &APP.state {
 								if let ChatState::Tied(_) = chat.state {
-									APP.job_state_set(JobState::Err, true);
+									APP.job_state_set(
+										JobState::Err(JobSwitchAppState::Chat(Chat::default())),
+										true,
+									);
 									APP.job_log_add(TIE_BROKEN);
 								} else {
 									// TODO:
@@ -504,7 +543,7 @@ async unsafe fn read_ws(
 				_ => (),
 			},
 			Err(_) => {
-				APP.job_state_set(JobState::Err, false);
+				APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 				APP.job_log_add(MESSAGE_CORRUPTED_ERROR)
 			}
 		}
@@ -513,7 +552,7 @@ async unsafe fn read_ws(
 	// TODO:
 	// This is from an earlier commit, is it ok?
 	if let AppState::Chat(_) = APP.state {
-		APP.job_state_set(JobState::Err, true);
+		APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), true);
 		APP.job_log_add(CONNECTION_DROPPED_ERROR)
 	}
 }
@@ -525,7 +564,8 @@ async unsafe fn write_ws(
 		Message,
 	>,
 ) {
-	loop {
+	APP.writer_exists = true;
+	'outer: loop {
 		// TODO:
 		// Is sleeping a good idea?
 		thread::sleep(time::Duration::from_millis(100));
@@ -541,16 +581,17 @@ async unsafe fn write_ws(
 			}
 			if with.send(Message::Text(i.to_string())).await.is_err() {
 				APP.job_log_add(AUTH_JOB_CONNECT_FAULT);
-				APP.job_state_set(JobState::Err, false);
+				APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 			}
 			if i == &TX_DROPME_FLAG.to_string() {
 				APP.sending_queue = Vec::new();
 				APP.sending_queue_sent = 0;
-				return;
+				break 'outer;
 			}
 			APP.sending_queue_sent += 1;
 		}
 	}
+	APP.writer_exists = false;
 }
 
 /// Make new connection and return a socket
@@ -597,15 +638,14 @@ async unsafe fn start_auth_job() {
 				match connection {
 					Err(_) => {
 						APP.job_log_add(AUTH_JOB_CONNECT_FAULT);
-						APP.job_state_set(JobState::Err, false);
+						APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 						return;
 					}
 					Ok(ok) => {
 						APP.job_log_add(JOB_SUCCESS);
 						let (write, read) = ok.split();
-						let r = tokio::spawn(read_ws(read));
-						let w = tokio::spawn(write_ws(write));
-						APP.socket_handles = Some((w, r));
+						tokio::spawn(read_ws(read));
+						tokio::spawn(write_ws(write));
 						APP.job_progress_set(90);
 						APP.job_log_add(AUTH_JOB_CONNECT_AUTH);
 						// FIXME:
@@ -621,17 +661,17 @@ async unsafe fn start_auth_job() {
 				};
 			} else {
 				APP.job_log_add(AUTH_JOB_PRECONNECT_FAULT_DISAPPROVED);
-				APP.job_state_set(JobState::Err, false);
+				APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 				return;
 			}
 		} else {
 			APP.job_log_add(AUTH_JOB_PRECONNECT_FAULT_PARSE);
-			APP.job_state_set(JobState::Err, false);
+			APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 			return;
 		}
 	} else {
 		APP.job_log_add(AUTH_JOB_PRECONNECT_FAULT_GET);
-		APP.job_state_set(JobState::Err, false);
+		APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 		return;
 	}
 }
@@ -670,8 +710,8 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 				.title_alignment(Alignment::Center)
 				.style(Style::default().bg(match job.state {
 					JobState::InProgress => Color::DarkGray,
-					JobState::Ok => Color::Green,
-					JobState::Err => Color::Red,
+					JobState::Ok(_) => Color::Green,
+					JobState::Err(_) => Color::Red,
 				}));
 			f.render_widget(main_window, chunks[0]);
 			{
