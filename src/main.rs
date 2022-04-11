@@ -18,7 +18,7 @@ use std::{error::Error, io, panic, process, thread, time};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tui::{
 	backend::{Backend, CrosstermBackend},
-	layout::{Alignment, Constraint, Direction, Layout},
+	layout::{Alignment, Constraint, Corner, Direction, Layout},
 	style::{Color, Style},
 	text::{Span, Spans},
 	widgets::{Block, BorderType, Borders, Gauge, List, ListItem, Paragraph},
@@ -52,7 +52,7 @@ enum JobSwitchAppState {
 
 #[derive(PartialEq, Clone)]
 enum JobState {
-	InProgress,
+	InProgress(Option<JobSwitchAppState>),
 	Ok(JobSwitchAppState),
 	Err(JobSwitchAppState),
 }
@@ -72,7 +72,7 @@ impl Job {
 		Job {
 			title: with_title,
 			progress: 0,
-			state: JobState::InProgress,
+			state: JobState::InProgress(None),
 			log: Vec::new(),
 			data: Vec::new(),
 		}
@@ -108,6 +108,11 @@ impl Chat {
 			messages: Vec::new(),
 			typing_state_iteration: 0,
 		}
+	}
+	fn messages_add(&mut self, msg: &str) {
+		let time = Local::now();
+		let t_string = time.format("%H:%M");
+		self.messages.insert(0, format!("({}) {}", t_string, msg));
 	}
 }
 
@@ -241,6 +246,19 @@ impl App {
 			self.sending_queue.push(msg)
 		}
 	}
+	/// Add text to App Chat's messages (if current state is `Chat`, otherwise do nothing)
+	fn chat_messages_add(&mut self, msg: &str) {
+		// FIXME:
+		// This is imo the only 'real' *unsafe* part of the story
+		match &self.state {
+			AppState::Chat(chat) => {
+				let mut chat = chat.clone();
+				chat.messages_add(msg);
+				self.state = AppState::Chat(chat)
+			}
+			_ => { /* TODO: Maybe panic? */ }
+		}
+	}
 }
 
 // FIXME:
@@ -328,19 +346,26 @@ async unsafe fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()
 										}
 									}
 									1 => APP.requested_job = 2,
-									_ => unimplemented!(),
+									3 => send_message().await,
+									_ => (),
 								}
 							} else if let AppState::Job(job) = &APP.state {
 								match &job.state {
-									JobState::InProgress => (),
-									JobState::Ok(ok) => {
-										set_state_using_switch(ok.clone());
+									JobState::InProgress(switch) if switch.is_some() => {
+										// FIXME:
+										// Undef behavior in case we weren't tying
+										APP.sending_queue_add(RXTX_UNTIE_FLAG.to_string());
+										set_state_using_switch(switch.clone().unwrap());
+									}
+									JobState::Ok(switch) => {
+										set_state_using_switch(switch.clone());
 										continue;
 									}
-									JobState::Err(err) => {
-										set_state_using_switch(err.clone());
+									JobState::Err(switch) => {
+										set_state_using_switch(switch.clone());
 										continue;
 									}
+									_ => (),
 								}
 							};
 						}
@@ -400,7 +425,14 @@ async unsafe fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()
 /// Switch App's state to a corresponding one and reset all associated variables
 unsafe fn set_state(to: AppState) {
 	match &to {
-		AppState::Chat(_) => APP.max_input_focus = 3,
+		AppState::Chat(chat) => {
+			APP.max_input_focus = if let ChatState::Tied(_) = chat.state {
+				3
+			} else {
+				1
+			};
+			APP.input_focus = 1;
+		}
 		AppState::Auth => {
 			if APP.writer_exists {
 				APP.sending_queue_add(TX_DROPME_FLAG.to_string())
@@ -409,11 +441,14 @@ unsafe fn set_state(to: AppState) {
 			// 	APP.socket_handles.as_ref().unwrap().0.abort();
 			// 	APP.socket_handles.as_ref().unwrap().1.abort();
 			// }
-			APP.max_input_focus = 1
+			APP.max_input_focus = 1;
+			APP.input_focus = 0;
 		}
-		_ => APP.max_input_focus = 1,
+		_ => {
+			APP.max_input_focus = 1;
+			APP.input_focus = 0
+		}
 	}
-	APP.input_focus = 0;
 	APP.inputs = [String::new(), String::new(), String::new()];
 	APP.state = to;
 }
@@ -422,7 +457,13 @@ unsafe fn set_state(to: AppState) {
 unsafe fn set_state_using_switch(to: JobSwitchAppState) {
 	match &to {
 		JobSwitchAppState::Chat(chat) => {
-			APP.max_input_focus = 3;
+			APP.max_input_focus = if let ChatState::Tied(_) = chat.state {
+				APP.input_focus = 2;
+				3
+			} else {
+				APP.input_focus = 1;
+				1
+			};
 			APP.state = AppState::Chat(chat.to_owned());
 		}
 		JobSwitchAppState::Auth => {
@@ -431,9 +472,9 @@ unsafe fn set_state_using_switch(to: JobSwitchAppState) {
 			}
 			APP.max_input_focus = 1;
 			APP.state = AppState::Auth;
+			APP.input_focus = 0;
 		}
 	}
-	APP.input_focus = 0;
 	APP.inputs = [String::new(), String::new(), String::new()];
 }
 
@@ -449,7 +490,6 @@ async unsafe fn read_ws(
 				Message::Text(txt) => {
 					let chars = txt.chars();
 					let flag = chars.clone().collect::<Vec<char>>()[0] as char;
-					let _body: String = chars.skip(1).collect();
 					match flag {
 						RX_AUTH_OK_FLAG => {
 							if let AppState::Job(job) = &APP.state {
@@ -470,6 +510,17 @@ async unsafe fn read_ws(
 							if let AppState::Job(job) = &APP.state {
 								if job.title == AUTH_JOB {
 									APP.job_log_add(AUTH_JOB_CONNECT_AUTH_FAULT);
+									APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false)
+								} else {
+									// TODO:
+									// Panic?
+								}
+							}
+						}
+						RX_AUTH_FAULT_OVERAUTH_FLAG => {
+							if let AppState::Job(job) = &APP.state {
+								if job.title == AUTH_JOB {
+									APP.job_log_add(AUTH_JOB_CONNECT_AUTH_FAULT_OVERAUTH);
 									APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false)
 								} else {
 									// TODO:
@@ -520,6 +571,35 @@ async unsafe fn read_ws(
 								}
 							}
 						}
+						RX_TIE_FAULT_SELFTIE_FLAG => {
+							if let AppState::Job(job) = &APP.state {
+								if job.title == TIE_JOB {
+									APP.job_log_add(TIE_JOB_FAULT_SELFTIE);
+									APP.job_state_set(
+										JobState::Err(JobSwitchAppState::Chat(Chat::default())),
+										false,
+									)
+								} else {
+									// TODO:
+									// Panic?
+								}
+							}
+						}
+						RX_TIE_FAULT_OVERTIE_FLAG => {
+							if let AppState::Job(job) = &APP.state {
+								if job.title == TIE_JOB {
+									APP.job_log_add(TIE_JOB_FAULT_OVERTIE);
+									APP.job_state_set(
+										JobState::Err(JobSwitchAppState::Chat(Chat::default())),
+										false,
+									);
+									APP.sending_queue_add(RXTX_UNTIE_FLAG.to_string());
+								} else {
+									// TODO:
+									// Panic?
+								}
+							}
+						}
 						RXTX_UNTIE_FLAG => {
 							if let AppState::Chat(chat) = &APP.state {
 								if let ChatState::Tied(_) = chat.state {
@@ -534,9 +614,22 @@ async unsafe fn read_ws(
 								}
 							}
 						}
-						RX_UNKNOWN_FLAG => {
-							panic!("{}", RX_UNKNOWN_ERROR);
+						RXTX_MESSAGE_FLAG => {
+							if let AppState::Chat(chat) = &APP.state {
+								if let ChatState::Tied(_) = chat.state {
+									let body: String = chars.skip(1).collect();
+									APP.chat_messages_add(&body);
+								} else {
+									// TODO:
+									// Panic?
+								}
+							}
 						}
+						RXTX_FAULT_FLAG => {
+							APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), true);
+							APP.job_log_add(RX_GENERAL_ERROR);
+						}
+						RXTX_OK_FLAG => (),
 						_ => APP.job_log_add(&txt),
 					}
 				}
@@ -606,10 +699,49 @@ async unsafe fn ws_connect() -> Result<WebSocketStream<MaybeTlsStream<tokio::net
 	Ok(ws_stream)
 }
 
+/// Send message to the current tie subject
+async unsafe fn send_message() {
+	let message = APP.inputs[2].clone();
+	APP.inputs[2] = String::new();
+	APP.sending_queue_add(format!(
+		"{}{}: {}",
+		RXTX_MESSAGE_FLAG,
+		APP.user_key.as_ref().unwrap().username,
+		message
+	));
+}
+
 /// Stop tie if exists
 async unsafe fn untie() {
 	APP.sending_queue_add(RXTX_UNTIE_FLAG.to_string());
 	set_state(AppState::Chat(Chat::default()));
+}
+
+/// Change App's state to `Job` and begin tying
+async unsafe fn start_tie_job() {
+	let subject = APP.inputs[0].clone();
+	let mut job = Job::default(TIE_JOB.to_string());
+	job.data = vec![subject.clone()];
+	job.state = JobState::InProgress(Some(JobSwitchAppState::Chat(Chat::default())));
+	let untie_required: bool;
+	if let AppState::Chat(chat) = &APP.state {
+		if let ChatState::Tied(_) = chat.state {
+			untie_required = true;
+		} else {
+			untie_required = false;
+		}
+	} else {
+		untie_required = false;
+	};
+	set_state(AppState::Job(job));
+	if untie_required {
+		APP.job_log_add(&format!("{}", TIE_JOB_UNTYING));
+		APP.sending_queue_add(RXTX_UNTIE_FLAG.to_string());
+		thread::sleep(time::Duration::from_millis(500));
+	}
+	APP.job_log_add(&format!("{} {}...", TIE_JOB_WITH, subject));
+	thread::sleep(time::Duration::from_millis(500));
+	APP.sending_queue_add(format!("{}{}", TX_TIE_INIT_FLAG, subject));
 }
 
 /// Change App's state to `Job` and begin authorization
@@ -676,17 +808,6 @@ async unsafe fn start_auth_job() {
 	}
 }
 
-/// Change App's state to `Job` and begin tying
-async unsafe fn start_tie_job() {
-	let subject = APP.inputs[0].clone();
-	let mut job = Job::default(TIE_JOB.to_string());
-	job.data = vec![subject.clone()];
-	set_state(AppState::Job(job));
-	APP.job_log_add(&format!("{} {}...", TIE_JOB_WITH, subject));
-	thread::sleep(time::Duration::from_millis(500));
-	APP.sending_queue_add(format!("{}{}", TX_TIE_INIT_FLAG, subject));
-}
-
 /// Renders app's `Job` state UI
 unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 	// TODO: Typing indicator
@@ -709,7 +830,7 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 				.title(job.title.clone())
 				.title_alignment(Alignment::Center)
 				.style(Style::default().bg(match job.state {
-					JobState::InProgress => Color::DarkGray,
+					JobState::InProgress(_) => Color::DarkGray,
 					JobState::Ok(_) => Color::Green,
 					JobState::Err(_) => Color::Red,
 				}));
@@ -761,12 +882,17 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 						.title_alignment(Alignment::Center),
 				);
 				f.render_widget(log, chunks[1]);
-				let prompt = Paragraph::new(PROMPT)
-					.style(Style::default())
-					.alignment(Alignment::Center);
-				match job.state {
-					JobState::InProgress => (),
-					_ => f.render_widget(prompt, chunks[3]),
+				match &job.state {
+					JobState::InProgress(switch) => {
+						if switch.is_some() {
+							let prompt = Paragraph::new(ABORT_PROMPT).alignment(Alignment::Center);
+							f.render_widget(prompt, chunks[3])
+						}
+					}
+					_ => {
+						let prompt = Paragraph::new(CONTINUE_PROMPT).alignment(Alignment::Center);
+						f.render_widget(prompt, chunks[3])
+					}
 				}
 			}
 		}
@@ -840,6 +966,11 @@ unsafe fn auth_ui<B: Backend>(f: &mut Frame<B>) {
 unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 	match &APP.state {
 		AppState::Chat(chat) => {
+			let tied = if let ChatState::Tied(_) = chat.state {
+				true
+			} else {
+				false
+			};
 			let chunks = Layout::default()
 				.direction(Direction::Vertical)
 				.constraints(
@@ -858,10 +989,10 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				ChatState::Tied(a) => format!("{} {}", CHAT_STATE_TIED_WITH, a),
 			};
 			let hint = if APP.input_focus == 0 {
-				if let ChatState::Untied = chat.state {
-					CHAT_STATE_LOGOUT_PROMPT
-				} else {
+				if tied {
 					CHAT_STATE_UNTIE_PROMPT
+				} else {
+					CHAT_STATE_LOGOUT_PROMPT
 				}
 			} else {
 				""
@@ -879,28 +1010,42 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				Style::default()
 			});
 			f.render_widget(header, chunks[0]);
-			let subject_input = Paragraph::new(APP.inputs[0].as_ref())
-				.style(match APP.input_focus {
-					1 => Style::default().fg(Color::Cyan),
-					_ => Style::default(),
-				})
-				.block(
-					Block::default()
-						.borders(Borders::ALL)
-						.title(match APP.input_focus {
-							1 => USERNAME_BLOCK_ACTIVE,
-							_ => USERNAME_BLOCK_INACTIVE,
-						})
-						.border_type(match APP.input_focus {
-							1 => BorderType::Thick,
-							_ => BorderType::Double,
-						}),
-				);
+			let in_focus = APP.input_focus == 1;
+			let subject_input = Paragraph::new(if !in_focus && tied {
+				USERNAME_BLOCK_FILL_TIED
+			} else {
+				APP.inputs[0].as_ref()
+			})
+			.style(if in_focus {
+				Style::default().fg(Color::Cyan)
+			} else {
+				Style::default()
+			})
+			.block(
+				Block::default()
+					.borders(Borders::ALL)
+					.title(if in_focus {
+						USERNAME_BLOCK_ACTIVE
+					} else {
+						USERNAME_BLOCK_INACTIVE
+					})
+					.border_type(if in_focus {
+						BorderType::Thick
+					} else {
+						BorderType::Double
+					}),
+			);
 			f.render_widget(subject_input, chunks[1]);
 			let encryption_key_input = Paragraph::new(APP.inputs[1].as_ref())
 				.style(match APP.input_focus {
 					2 => Style::default().fg(Color::Cyan),
-					_ => Style::default(),
+					_ => {
+						if tied {
+							Style::default()
+						} else {
+							Style::default().fg(Color::DarkGray)
+						}
+					}
 				})
 				.block(
 					Block::default()
@@ -916,21 +1061,29 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				.messages
 				.iter()
 				.enumerate()
-				.map(|(i, m)| {
-					let content = vec![Spans::from(Span::raw(format!("{}: {}", i, m)))];
+				.map(|(_, m)| {
+					let content = vec![Spans::from(Span::raw(m))];
 					ListItem::new(content)
 				})
 				.collect();
-			let messages = List::new(messages).block(
-				Block::default()
-					.style(Style::default().fg(Color::Gray))
-					.borders(Borders::ALL),
-			);
+			let messages = List::new(messages)
+				.block(
+					Block::default()
+						.style(Style::default().fg(Color::Gray))
+						.borders(Borders::ALL),
+				)
+				.start_corner(Corner::BottomLeft);
 			f.render_widget(messages, chunks[3]);
 			let new_message_input = Paragraph::new(APP.inputs[2].as_ref())
 				.style(match APP.input_focus {
 					3 => Style::default().fg(Color::Cyan),
-					_ => Style::default(),
+					_ => {
+						if tied {
+							Style::default()
+						} else {
+							Style::default().fg(Color::DarkGray)
+						}
+					}
 				})
 				.block(
 					Block::default()

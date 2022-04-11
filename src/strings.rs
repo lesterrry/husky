@@ -21,17 +21,19 @@ pub mod ui {
 	[F9] / [CTRL + C] – Exit";
 
 	pub const FATAL_RUNTIME_ERROR: 
-		&str = "Runtime error occured";
+		&str = "WARNING: FATAL";
 	pub const CONNECTION_DROPPED_ERROR: 
 		&str = "Websocket connection dropped";
 	pub const MESSAGE_CORRUPTED_ERROR: 
 		&str = "Unable to read from connection stream";
-	pub const RX_UNKNOWN_ERROR: 
-		&str = "Recieved unknown command flag";
+	pub const RX_GENERAL_ERROR: 
+		&str = "Recieved client error from socket";
 	pub const USERNAME_BLOCK_INACTIVE: 
 		&str = " Username ";
 	pub const USERNAME_BLOCK_ACTIVE: 
 		&str = " Username (ENTER to initiate tie) ";
+	pub const USERNAME_BLOCK_FILL_TIED: 
+		&str = "[TIED]";
 	pub const AUTH_KEY_BLOCK_INACTIVE: 
 		&str = " Auth key ";
 	pub const AUTH_KEY_BLOCK_ACTIVE: 
@@ -54,8 +56,10 @@ pub mod ui {
 		&str = " / ENTER to Log out";
 	pub const CHAT_STATE_UNTIE_PROMPT: 
 		&str = " / ENTER to Untie";
-	pub const PROMPT: 
+	pub const CONTINUE_PROMPT: 
 		&str = "[ ENTER to continue ]";
+	pub const ABORT_PROMPT: 
+		&str = "[ ENTER to abort ]";
 	pub const LOG_BLOCK: 
 		&str = " Progress log ";
 	pub const TIE_BROKEN:
@@ -82,6 +86,8 @@ pub mod ui {
 		&str = "Awaiting response...";
 	pub const AUTH_JOB_CONNECT_AUTH_FAULT: 
 		&str = "FAULT: Access denied";
+	pub const AUTH_JOB_CONNECT_AUTH_FAULT_OVERAUTH: 
+		&str = "FAULT: User already logged in";
 	pub const AUTH_JOB_CONNECT_FAULT: 
 		&str = "FAULT: Unable to communicate with socket";
 	pub const TIE_JOB:
@@ -90,8 +96,14 @@ pub mod ui {
 		&str = "Tying with";
 	pub const TIE_JOB_AWAITING:
 		&str = "Waiting for subject to connect...";
+	pub const TIE_JOB_UNTYING:
+		&str = "Breaking existing tie...";
 	pub const TIE_JOB_FAULT_NOUSER:
 		&str = "FAULT: This user does not exist";
+	pub const TIE_JOB_FAULT_SELFTIE:
+		&str = "FAULT: Attempt to tie with self";
+	pub const TIE_JOB_FAULT_OVERTIE:
+		&str = "FAULT: Existing tie not broken";	
 }
 
 #[rustfmt::skip]
@@ -107,16 +119,24 @@ pub mod flags {
 		char = 'O';
 	pub const RX_AUTH_FAULT_FLAG: 
 		char = 'D';
+	pub const RX_AUTH_FAULT_OVERAUTH_FLAG:
+		char = 'I';
 	pub const RX_TIE_OK_FLAG:
 		char = 'S';
 	pub const RX_TIE_OK_WAIT_FLAG:
 		char = 'W';
 	pub const RX_TIE_FAULT_NOUSER_FLAG:
 		char = 'N';
+	pub const RX_TIE_FAULT_SELFTIE_FLAG:
+		char = 'M';
+	pub const RX_TIE_FAULT_OVERTIE_FLAG:
+		char = 'R';
 	pub const RXTX_UNTIE_FLAG:
 		char = 'C';
 	pub const RXTX_OK_FLAG:
 		char = 'Y';
-	pub const RX_UNKNOWN_FLAG: 
-		char = 'U';
+	pub const RXTX_FAULT_FLAG: 
+		char = 'E';
+	pub const RXTX_MESSAGE_FLAG: 
+		char = 'B';
 }

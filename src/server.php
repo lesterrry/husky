@@ -25,12 +25,16 @@ define("RX_DROPME_FLAG", "X");
 define("RX_TIE_INIT_FLAG", "T");
 define("TX_AUTH_OK_FLAG", "O");
 define("TX_AUTH_FAULT_FLAG", "D");
+define("TX_AUTH_FAULT_OVERAUTH_FLAG", "I");
 define("TX_TIE_OK_FLAG", "S");
 define("TX_TIE_OK_WAIT_FLAG", "W");
 define("TX_TIE_FAULT_NOUSER_FLAG", "N");
+define("TX_TIE_FAULT_SELFTIE_FLAG", "M");
+define("TX_TIE_FAULT_OVERTIE_FLAG", "R");
 define("RXTX_UNTIE_FLAG", "C");
 define("RXTX_OK_FLAG", "Y");
-define("TX_UNKNOWN_FLAG", "U");
+define("RXTX_FAULT_FLAG", "E");
+define("RXTX_MESSAGE_FLAG", "B");
 
 $socket = stream_socket_server(LOCALHOST_PORT, $errno, $errstr);
 
@@ -82,24 +86,27 @@ function on_close($connect) {
 // Handling incoming message
 function on_message($connect, $data) {
 	global $approved, $waitlist, $ties;
-	$response = TX_UNKNOWN_FLAG;
+	$response = RXTX_OK_FLAG;
 	$txt = decode($data)['payload'];
 	$flag = $txt[0];
 	$body = substr($txt, 1);
-	echo($txt . "\n");
-	unset($txt);
+	echo("Got '" . $txt . "'\n");
 	switch ($flag) {
 		case RX_AUTH_FLAG:
-		$body_exp = explode('/', $body);
-		$access_key = $body_exp[0];
-		unset($body);
-		$user_key = $body_exp[1];
-			if ($access_key == ACCESS_KEY && in_array($user_key, USER_KEYS)) {
-				$user_name = explode(':', $user_key);
-				$approved[$user_name[0]] = $connect;
-				$response = TX_AUTH_OK_FLAG;
+			$body_exp = explode('/', $body);
+			$access_key = $body_exp[0];
+			unset($body);
+			$user_key = $body_exp[1];
+			$user_name = explode(':', $user_key)[0];
+			if (array_key_exists($user_name, $approved)) {
+				$response = TX_AUTH_FAULT_OVERAUTH_FLAG;
 			} else {
-				$response = TX_AUTH_FAULT_FLAG;
+				if ($access_key == ACCESS_KEY && in_array($user_key, USER_KEYS)) {
+					$approved[$user_name] = $connect;
+					$response = TX_AUTH_OK_FLAG;
+				} else {
+					$response = TX_AUTH_FAULT_FLAG;
+				}
 			}
 			break;
 		case RX_DROPME_FLAG:
@@ -107,8 +114,12 @@ function on_message($connect, $data) {
 			return;
 		case RX_TIE_INIT_FLAG:
 			if (in_array($connect, $approved)) {
-				if (in_array($body, USER_NAMES)) {
-					$user_name = array_search($connect, $approved);
+				$user_name = array_search($connect, $approved);
+				if ($user_name == $body) {
+					$response = TX_TIE_FAULT_SELFTIE_FLAG;
+				} else if (array_key_exists($user_name, $ties) || in_array($user_name, $ties)) { 
+					$response = TX_TIE_FAULT_OVERTIE_FLAG;
+				} else if (in_array($body, USER_NAMES)) {
 					if ($waitlist[$body] === $user_name) {
 						$response = TX_TIE_OK_FLAG;
 						$ties[$body] = $user_name;
@@ -129,18 +140,24 @@ function on_message($connect, $data) {
 		case RXTX_UNTIE_FLAG:
 			if (in_array($connect, $approved)) {
 				$user_name = array_search($connect, $approved);
+				untie($user_name);
+			} else {
+				conn_close($connect);
+				return;
+			}
+			break;
+		case RXTX_MESSAGE_FLAG:
+			if (in_array($connect, $approved)) {
+				$user_name = array_search($connect, $approved);
 				if (array_key_exists($user_name, $ties)) {
-					$response = RXTX_OK_FLAG;
-					fwrite($approved[$ties[$user_name]], encode(RXTX_UNTIE_FLAG));
-					unset($ties[$user_name]);
+					fwrite($approved[$ties[$user_name]], encode(RXTX_MESSAGE_FLAG . $body));
+					$response = $txt;
 				} else if (in_array($user_name, $ties)) {
-					$response = RXTX_OK_FLAG;
 					$needle = array_search($user_name, $ties);
-					fwrite($approved[$needle], encode(RXTX_UNTIE_FLAG));
-					unset($ties[$needle]);
-				} else if (array_key_exists($user_name, $waitlist)) {
-					$response = RXTX_OK_FLAG;
-					unset($waitlist[$user_name]);
+					fwrite($approved[$needle], encode(RXTX_MESSAGE_FLAG . $body));
+					$response = $txt;
+				} else {
+					$response = RXTX_FAULT_FLAG;
 				}
 			} else {
 				conn_close($connect);
@@ -154,6 +171,20 @@ function on_message($connect, $data) {
 	fwrite($connect, encode($response));
 }
 
+function untie($user_name) {
+	global $ties, $approved, $waitlist;
+	if (array_key_exists($user_name, $ties)) {
+		fwrite($approved[$ties[$user_name]], encode(RXTX_UNTIE_FLAG));
+		unset($ties[$user_name]);
+	} else if (in_array($user_name, $ties)) {
+		$needle = array_search($user_name, $ties);
+		fwrite($approved[$needle], encode(RXTX_UNTIE_FLAG));
+		unset($ties[$needle]);
+	} else if (array_key_exists($user_name, $waitlist)) {
+		unset($waitlist[$user_name]);
+	}
+}
+
 // Dropping the connection
 function conn_close($conn) {
 	global $queue, $approved, $waitlist;
@@ -163,9 +194,12 @@ function conn_close($conn) {
 	// echo("CLOSING...\n");
 	fclose($conn);
 	unset($queue[array_search($conn, $queue)]);
-	$needle = array_search($conn, $approved);
-	if (in_array($conn, $approved)) { unset($approved[$needle]); }
-	if (array_key_exists($needle, $waitlist)) { unset($waitlist[$needle]); }
+	if (in_array($conn, $approved)) {
+		$needle = array_search($conn, $approved);
+		unset($approved[$needle]);
+		if (array_key_exists($needle, $waitlist)) { unset($waitlist[$needle]); }
+		untie($needle);
+	}
 	on_close($conn); // Handling connection closing
 	// var_dump($queue);
 	// var_dump($approved);
