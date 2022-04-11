@@ -1,6 +1,6 @@
 [package]
 name = "husky"
-version = "0.1.0-beta"
+version = "0.1.1-beta"
 authors = ["Lester Covey <me@lestercovey.ml>"]
 edition = "2021"
 
