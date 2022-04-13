@@ -77,10 +77,12 @@ impl Job {
 			data: Vec::new(),
 		}
 	}
-	fn log_add(&mut self, msg: &str) {
+	unsafe fn log_add(&mut self, msg: &str) {
 		let time = Local::now();
 		let t_string = time.format("%H:%M:%S");
-		self.log.push(format!("({}) {}", t_string, msg));
+		// FIXME:
+		// This is the dumbest fucking shit but its beta anyways
+		JOB_LOG.push(format!("({}) {}", t_string, msg));
 	}
 }
 
@@ -191,7 +193,7 @@ impl App {
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
-	fn job_log_add(&mut self, msg: &str) {
+	unsafe fn job_log_add(&mut self, msg: &str) {
 		// FIXME:
 		// This is imo the only 'real' *unsafe* part of the story
 		match &self.state {
@@ -265,6 +267,8 @@ impl App {
 // I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrrr.
 /// The main global App instance, initialized as nullable
 static mut APP: App = App::null();
+/// The job log. It's here for... reasons
+static mut JOB_LOG: Vec<String> = Vec::new();
 
 #[allow(dead_code)]
 #[cfg(debug_assertions)]
@@ -664,14 +668,25 @@ async unsafe fn write_ws(
 		thread::sleep(time::Duration::from_millis(100));
 		let mut sent: u8 = 0;
 		let app_sent = APP.sending_queue_sent;
-		if app_sent >= 10 {
-			APP.sending_queue_sent = 0
+		// Fuck i'm an idiot
+		if app_sent >= 10 && APP.sending_queue.len() < 10 {
+			APP.job_log_add(&format!("1.1"));
+			APP.sending_queue_sent = 0;
+			APP.job_log_add(&format!("1.2"));
+			continue 'outer;
 		}
 		for i in &APP.sending_queue {
 			if sent < app_sent {
 				sent += 1;
 				continue;
 			}
+			APP.job_log_add(&format!(
+				"2. s:{} as:{}, i:{}, len:{}",
+				sent,
+				app_sent,
+				i,
+				APP.sending_queue.len()
+			));
 			if with.send(Message::Text(i.to_string())).await.is_err() {
 				APP.job_log_add(AUTH_JOB_CONNECT_FAULT);
 				APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
@@ -850,9 +865,14 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 						.as_ref(),
 					)
 					.split(chunks[0]);
+				let jp = job.progress;
+				// FIXME:
+				// Shotgun approach (aimed to fix #2)
+				#[allow(unused_comparisons)]
+				let progress = if jp >= 0 && jp <= 100 { jp } else { 0 };
 				let progress_bar = Gauge::default()
 					.gauge_style(Style::default().fg(Color::White))
-					.percent(job.progress)
+					.percent(progress)
 					.label(Span::styled(
 						format!("{}%", job.progress),
 						Style::default().fg(Color::Black),
@@ -865,8 +885,7 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 				f.render_widget(progress_bar, chunks[0]);
 				// TODO:
 				// It'd be cool to place `ListItem`s into `Job` instead of `String`s, so I could have the log formatted differently
-				let log_messages: Vec<ListItem> = job
-					.log
+				let log_messages: Vec<ListItem> = JOB_LOG
 					.iter()
 					.enumerate()
 					.map(|(_, m)| {
