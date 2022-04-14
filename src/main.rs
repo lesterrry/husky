@@ -63,7 +63,6 @@ struct Job {
 	title: String,
 	progress: u16,
 	state: JobState,
-	log: Vec<String>,
 	data: Vec<String>,
 }
 
@@ -73,14 +72,15 @@ impl Job {
 			title: with_title,
 			progress: 0,
 			state: JobState::InProgress(None),
-			log: Vec::new(),
 			data: Vec::new(),
 		}
 	}
-	fn log_add(&mut self, msg: &str) {
+	unsafe fn log_add(&mut self, msg: &str) {
 		let time = Local::now();
 		let t_string = time.format("%H:%M:%S");
-		self.log.push(format!("({}) {}", t_string, msg));
+		// FIXME:
+		// This is the dumbest fucking shit but its beta anyways
+		JOB_LOG.push(format!("({}) {}", t_string, msg));
 	}
 }
 
@@ -88,16 +88,12 @@ impl Job {
 #[derive(PartialEq, Clone)]
 struct Chat {
 	state: ChatState,
-	messages: Vec<String>,
-	typing_state_iteration: u8,
 }
 
 impl Default for Chat {
 	fn default() -> Chat {
 		Chat {
 			state: ChatState::Untied,
-			messages: Vec::new(),
-			typing_state_iteration: 0,
 		}
 	}
 }
@@ -105,14 +101,14 @@ impl Chat {
 	fn with_subject(with_subject: String) -> Chat {
 		Chat {
 			state: ChatState::Tied(with_subject),
-			messages: Vec::new(),
-			typing_state_iteration: 0,
 		}
 	}
-	fn messages_add(&mut self, msg: &str) {
+	unsafe fn messages_add(&self, msg: &str) {
 		let time = Local::now();
 		let t_string = time.format("%H:%M");
-		self.messages.insert(0, format!("({}) {}", t_string, msg));
+		// FIXME:
+		// This is the dumbest fucking shit (II) but its beta anyways
+		CHAT_MESSAGES.insert(0, format!("({}) {}", t_string, msg));
 	}
 }
 
@@ -191,7 +187,7 @@ impl App {
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
-	fn job_log_add(&mut self, msg: &str) {
+	unsafe fn job_log_add(&mut self, msg: &str) {
 		// FIXME:
 		// This is imo the only 'real' *unsafe* part of the story
 		match &self.state {
@@ -231,7 +227,6 @@ impl App {
 					title: FATAL_RUNTIME_ERROR.to_string(),
 					progress: 0,
 					state: job_state,
-					log: Vec::new(),
 					data: Vec::new(),
 				})
 			}
@@ -247,14 +242,12 @@ impl App {
 		}
 	}
 	/// Add text to App Chat's messages (if current state is `Chat`, otherwise do nothing)
-	fn chat_messages_add(&mut self, msg: &str) {
+	unsafe fn chat_messages_add(&mut self, msg: &str) {
 		// FIXME:
 		// This is imo the only 'real' *unsafe* part of the story
 		match &self.state {
 			AppState::Chat(chat) => {
-				let mut chat = chat.clone();
 				chat.messages_add(msg);
-				self.state = AppState::Chat(chat)
 			}
 			_ => { /* TODO: Maybe panic? */ }
 		}
@@ -265,6 +258,10 @@ impl App {
 // I could not figure out a better workaround. I ought to though. It's unsafe. Scary. Brrrrr.
 /// The main global App instance, initialized as nullable
 static mut APP: App = App::null();
+/// The job log. It's here for... reasons
+static mut JOB_LOG: Vec<String> = Vec::new();
+/// All messages of the current chat
+static mut CHAT_MESSAGES: Vec<String> = Vec::new();
 
 #[allow(dead_code)]
 #[cfg(debug_assertions)]
@@ -427,11 +424,15 @@ unsafe fn set_state(to: AppState) {
 	match &to {
 		AppState::Chat(chat) => {
 			APP.max_input_focus = if let ChatState::Tied(_) = chat.state {
+				APP.input_focus = 2;
 				3
 			} else {
+				APP.input_focus = 1;
 				1
 			};
 			APP.input_focus = 1;
+			CHAT_MESSAGES = Vec::new();
+			JOB_LOG = Vec::new();
 		}
 		AppState::Auth => {
 			if APP.writer_exists {
@@ -443,8 +444,9 @@ unsafe fn set_state(to: AppState) {
 			// }
 			APP.max_input_focus = 1;
 			APP.input_focus = 0;
+			JOB_LOG = Vec::new();
 		}
-		_ => {
+		AppState::Job(_) => {
 			APP.max_input_focus = 1;
 			APP.input_focus = 0
 		}
@@ -464,6 +466,8 @@ unsafe fn set_state_using_switch(to: JobSwitchAppState) {
 				APP.input_focus = 1;
 				1
 			};
+			CHAT_MESSAGES = Vec::new();
+			JOB_LOG = Vec::new();
 			APP.state = AppState::Chat(chat.to_owned());
 		}
 		JobSwitchAppState::Auth => {
@@ -471,8 +475,9 @@ unsafe fn set_state_using_switch(to: JobSwitchAppState) {
 				APP.sending_queue_add(TX_DROPME_FLAG.to_string())
 			}
 			APP.max_input_focus = 1;
-			APP.state = AppState::Auth;
 			APP.input_focus = 0;
+			JOB_LOG = Vec::new();
+			APP.state = AppState::Auth;
 		}
 	}
 	APP.inputs = [String::new(), String::new(), String::new()];
@@ -664,14 +669,20 @@ async unsafe fn write_ws(
 		thread::sleep(time::Duration::from_millis(100));
 		let mut sent: u8 = 0;
 		let app_sent = APP.sending_queue_sent;
-		if app_sent >= 10 {
-			APP.sending_queue_sent = 0
+		// Fuck i'm an idiot
+		if app_sent >= 10 && APP.sending_queue.len() < 10 {
+			APP.job_log_add(&format!("1.1"));
+			APP.sending_queue_sent = 0;
+			APP.job_log_add(&format!("1.2"));
+			continue 'outer;
 		}
 		for i in &APP.sending_queue {
 			if sent < app_sent {
 				sent += 1;
 				continue;
 			}
+			// DEBUG:
+			// APP.job_log_add(&format!("2. s:{} as:{}, i:{}, len:{}", sent, app_sent, i));
 			if with.send(Message::Text(i.to_string())).await.is_err() {
 				APP.job_log_add(AUTH_JOB_CONNECT_FAULT);
 				APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
@@ -819,6 +830,13 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 	// ( .title(strings::MESSAGES_BLOCK_TYPING[APP.typing_state_iteration as usize]) )
 	match &APP.state {
 		AppState::Job(job) => {
+			// FIXME:
+			// Shotgun approach (aimed to fix #2)
+			let progress = job.progress;
+			#[allow(unused_comparisons)]
+			if progress < 0 || progress > 100 {
+				return;
+			};
 			let chunks = Layout::default()
 				.direction(Direction::Vertical)
 				.vertical_margin(2)
@@ -852,7 +870,7 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 					.split(chunks[0]);
 				let progress_bar = Gauge::default()
 					.gauge_style(Style::default().fg(Color::White))
-					.percent(job.progress)
+					.percent(progress)
 					.label(Span::styled(
 						format!("{}%", job.progress),
 						Style::default().fg(Color::Black),
@@ -865,8 +883,7 @@ unsafe fn job_ui<B: Backend>(f: &mut Frame<B>) {
 				f.render_widget(progress_bar, chunks[0]);
 				// TODO:
 				// It'd be cool to place `ListItem`s into `Job` instead of `String`s, so I could have the log formatted differently
-				let log_messages: Vec<ListItem> = job
-					.log
+				let log_messages: Vec<ListItem> = JOB_LOG
 					.iter()
 					.enumerate()
 					.map(|(_, m)| {
@@ -1057,8 +1074,7 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 						}),
 				);
 			f.render_widget(encryption_key_input, chunks[2]);
-			let messages: Vec<ListItem> = chat
-				.messages
+			let messages: Vec<ListItem> = CHAT_MESSAGES
 				.iter()
 				.enumerate()
 				.map(|(_, m)| {
