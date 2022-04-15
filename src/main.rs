@@ -656,6 +656,7 @@ async unsafe fn read_ws(
 }
 
 /// Daemon for sending messages from queue
+#[tokio::main]
 async unsafe fn write_ws(
 	mut with: futures_util::stream::SplitSink<
 		WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
@@ -787,8 +788,12 @@ async unsafe fn start_auth_job() {
 					Ok(ok) => {
 						APP.job_log_add(JOB_SUCCESS);
 						let (write, read) = ok.split();
+						//tokio::spawn(write_ws(write));
+						thread::spawn(|| {
+							// Some expensive computation.
+							write_ws(write)
+						});
 						tokio::spawn(read_ws(read));
-						tokio::spawn(write_ws(write));
 						APP.job_progress_set(90);
 						APP.job_log_add(AUTH_JOB_CONNECT_AUTH);
 						// FIXME:
