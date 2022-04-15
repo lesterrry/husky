@@ -1,6 +1,6 @@
 [package]
 name = "husky"
-version = "0.1.1-beta.2"
+version = "0.1.1"
 authors = ["Lester Covey <me@lestercovey.ml>"]
 repository = "https://github.com/lesterrry/husky"
 edition = "2021"
