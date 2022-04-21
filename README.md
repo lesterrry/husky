@@ -12,3 +12,7 @@ Husky is a combination of frontend and backend services made to provide websocke
 4. Modify `secure.php` following the comments inside (`USER_KEYS` are `username:password` formatted) and place it in the same path as `server.php`
 5. Modify `secure.rs` following the comments inside
 6. Build [Rust](https://www.rust-lang.org/tools/install) client app
+
+## Recent activity [![Time period](https://images.repography.com/25115173/Lesterrry/husky/recent-activity/3a0bd8bf5820178f29f09247f5fca1d2_badge.svg)](https://repography.com)
+[![Timeline graph](https://images.repography.com/25115173/Lesterrry/husky/recent-activity/3a0bd8bf5820178f29f09247f5fca1d2_timeline.svg)](https://github.com/Lesterrry/husky/commits)
+[![Issue status graph](https://images.repography.com/25115173/Lesterrry/husky/recent-activity/3a0bd8bf5820178f29f09247f5fca1d2_issues.svg)](https://github.com/Lesterrry/husky/issues)
