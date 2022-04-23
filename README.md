@@ -1,6 +1,7 @@
 # 🦴 Husky
 Your friendly neighborhood websocket messenger
-![Screenshot](https://user-images.githubusercontent.com/45698501/162725458-45244245-66b2-4820-922f-7c25e93d3c20.png)
+<!-- ![Screenshot](https://user-images.githubusercontent.com/45698501/162725458-45244245-66b2-4820-922f-7c25e93d3c20.png) -->
+![Screenrec](https://user-images.githubusercontent.com/45698501/164934110-f6177815-7e6c-4902-b6d1-db1bbaefd206.gif)
 
 ## What's this?
 Husky is a combination of frontend and backend services made to provide websocket message exchange with encryption (todo) and no trace on server.
