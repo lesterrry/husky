@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php
 /*************************
-COPYRIGHT LESTER COVEY (me@lestercovey.ml) 
+COPYRIGHT LESTER COVEY (me@lestercovey.ml)
 AND MOROZOVSK (https://habr.com/ru/post/209864/),
 2022
 
@@ -9,7 +9,7 @@ AND MOROZOVSK (https://habr.com/ru/post/209864/),
 
 // TODO:
 // All this party only works on `ws` (unsafe websocket).
-// Though there's some additional encryption going on, 
+// Though there's some additional encryption going on,
 // I'd like to make this thing capable of handling `wss` (with SSL).
 // I just don't know how.
 
@@ -46,6 +46,11 @@ $queue = array();
 $approved = array();
 $waitlist = array();
 $ties = array();
+
+$user_names = array();
+foreach (USER_KEYS as $i) {
+	$user_names[] = explode(":", $i)[0];
+}
 
 while (true) {
 	$read = $queue;
@@ -90,7 +95,7 @@ function on_message($connect, $data) {
 	$txt = decode($data)['payload'];
 	$flag = $txt[0];
 	$body = substr($txt, 1);
-	echo("Got '" . $txt . "'\n");
+	//echo("Got '" . $txt . "'\n");
 	switch ($flag) {
 		case RX_AUTH_FLAG:
 			$body_exp = explode('/', $body);
@@ -119,7 +124,7 @@ function on_message($connect, $data) {
 					$response = TX_TIE_FAULT_SELFTIE_FLAG;
 				} else if (array_key_exists($user_name, $ties) || in_array($user_name, $ties)) { 
 					$response = TX_TIE_FAULT_OVERTIE_FLAG;
-				} else if (in_array($body, USER_NAMES)) {
+				} else if (in_array($body, $user_names)) {
 					if ($waitlist[$body] === $user_name) {
 						$response = TX_TIE_OK_FLAG;
 						$ties[$body] = $user_name;

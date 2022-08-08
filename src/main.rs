@@ -1,9 +1,8 @@
 /***************************
 COPYRIGHT LESTER COVEY (me@lestercovey.ml),
-2021
+2022
 
 ***************************/
-
 use crate::strings::flags::*;
 use crate::strings::ui::*;
 use chrono::Local;
@@ -25,6 +24,7 @@ use tui::{
 	Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
+use cocoon::Cocoon;
 mod secure;
 mod strings;
 
