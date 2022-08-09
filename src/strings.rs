@@ -44,8 +44,12 @@ pub mod ui {
 		&str = " Message ";
 	pub const NEW_MESSAGE_BLOCK_ACTIVE: 
 		&str = " Message (ENTER to send) ";
-	pub const ENCRYPTION_KEY_BLOCK: 
+	pub const ENCRYPTION_KEY_BLOCK_INACTIVE: 
 		&str = " Encryption key ";
+	pub const ENCRYPTION_KEY_BLOCK_ACTIVE_ENABLE: 
+		&str = " Encryption key (ENTER to enable encryption)";
+	pub const ENCRYPTION_KEY_BLOCK_ACTIVE_DISABLE: 
+		&str = " Encryption key (ENTER to disable encryption)";
 	pub const CHAT_STATE_UNTIED: 
 		&str = "Untied";
 	pub const CHAT_STATE_TIED_WITH: 
@@ -56,6 +60,10 @@ pub mod ui {
 		&str = " / ENTER to Log out";
 	pub const CHAT_STATE_UNTIE_PROMPT: 
 		&str = " / ENTER to Untie";
+	pub const ENCRYPTION_STATE_ENCRYPTED: 
+		&str = "Encrypted";
+	pub const ENCRYPTION_STATE_NOT_ENCRYPTED: 
+		&str = "NOT ENCRYPTED";
 	pub const CONTINUE_PROMPT: 
 		&str = "[ ENTER to continue ]";
 	pub const ABORT_PROMPT: 
@@ -103,7 +111,9 @@ pub mod ui {
 	pub const TIE_JOB_FAULT_SELFTIE:
 		&str = "FAULT: Attempt to tie with self";
 	pub const TIE_JOB_FAULT_OVERTIE:
-		&str = "FAULT: Existing tie not broken";	
+		&str = "FAULT: Existing tie not broken";
+	pub const ASTERISK:
+		&str = "*";	
 }
 
 #[rustfmt::skip]

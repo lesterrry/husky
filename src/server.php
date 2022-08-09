@@ -80,17 +80,17 @@ fclose($server);
 
 // Handling connection opening
 function on_open($connect, $info) {
-	echo "open\n";
+	//echo "open\n";
 }
 
 // Handling connection closing
 function on_close($connect) {
-	echo "close\n";
+	//echo "close\n";
 }
 
 // Handling incoming message
 function on_message($connect, $data) {
-	global $approved, $waitlist, $ties;
+	global $approved, $waitlist, $ties, $user_names;
 	$response = RXTX_OK_FLAG;
 	$txt = decode($data)['payload'];
 	$flag = $txt[0];
@@ -122,7 +122,7 @@ function on_message($connect, $data) {
 				$user_name = array_search($connect, $approved);
 				if ($user_name == $body) {
 					$response = TX_TIE_FAULT_SELFTIE_FLAG;
-				} else if (array_key_exists($user_name, $ties) || in_array($user_name, $ties)) { 
+				} else if (array_key_exists($user_name, $ties) || in_array($user_name, $ties)) {
 					$response = TX_TIE_FAULT_OVERTIE_FLAG;
 				} else if (in_array($body, $user_names)) {
 					if ($waitlist[$body] === $user_name) {

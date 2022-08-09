@@ -24,7 +24,7 @@ use tui::{
 	Frame, Terminal,
 };
 use unicode_width::UnicodeWidthStr;
-use cocoon::Cocoon;
+use cocoon::MiniCocoon;
 mod secure;
 mod strings;
 
@@ -144,6 +144,7 @@ struct App {
 	sending_queue: Vec<String>,
 	sending_queue_sent: u8,
 	writer_exists: bool,
+	cocoon: Option<MiniCocoon>,
 }
 
 impl App {
@@ -161,6 +162,7 @@ impl App {
 			sending_queue: Vec::new(),
 			sending_queue_sent: 0,
 			writer_exists: false,
+			cocoon: None
 		}
 	}
 	// FIXME:
@@ -184,6 +186,7 @@ impl App {
 			sending_queue: Vec::new(),
 			sending_queue_sent: 0,
 			writer_exists: false,
+			cocoon: None
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
@@ -343,6 +346,7 @@ async unsafe fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()
 										}
 									}
 									1 => APP.requested_job = 2,
+									2 => set_encryption(),
 									3 => send_message().await,
 									_ => (),
 								}
@@ -419,6 +423,20 @@ async unsafe fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()
 	}
 }
 
+/// Get a number of asterisks to represent a concealed string
+fn asterisks(r#for: &str) -> String {
+	let mut s = String::new();
+	for _i in 0 .. r#for.len() {
+		s += ASTERISK
+	}
+	return s
+}
+
+/// Set up encryption according to current key
+unsafe fn set_encryption() {
+
+}
+
 /// Switch App's state to a corresponding one and reset all associated variables
 unsafe fn set_state(to: AppState) {
 	match &to {
@@ -438,10 +456,6 @@ unsafe fn set_state(to: AppState) {
 			if APP.writer_exists {
 				APP.sending_queue_add(TX_DROPME_FLAG.to_string())
 			}
-			// if APP.socket_handles.is_some() {
-			// 	APP.socket_handles.as_ref().unwrap().0.abort();
-			// 	APP.socket_handles.as_ref().unwrap().1.abort();
-			// }
 			APP.max_input_focus = 1;
 			APP.input_focus = 0;
 			JOB_LOG = Vec::new();
@@ -1006,6 +1020,10 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 					.as_ref(),
 				)
 				.split(f.size());
+			let en = match APP.cocoon {
+				Some(_) => ENCRYPTION_STATE_ENCRYPTED,
+				None => ENCRYPTION_STATE_NOT_ENCRYPTED
+			};
 			let cs = match &chat.state {
 				ChatState::Untied => CHAT_STATE_UNTIED.to_string(),
 				ChatState::Tied(a) => format!("{} {}", CHAT_STATE_TIED_WITH, a),
@@ -1020,9 +1038,10 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				""
 			};
 			let header = Paragraph::new(format!(
-				"Husky v{} / {} / {}{}",
+				"Husky v{} / {} / {} / {}{}",
 				env!("CARGO_PKG_VERSION"),
 				APP.user_key.as_ref().unwrap().username,
+				en,
 				cs,
 				hint
 			))
@@ -1058,7 +1077,11 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 					}),
 			);
 			f.render_widget(subject_input, chunks[1]);
-			let encryption_key_input = Paragraph::new(APP.inputs[1].as_ref())
+			let title = match APP.input_focus {
+					2 => APP.inputs[1].clone(),
+					_ => asterisks(&APP.inputs[1])
+				};
+			let encryption_key_input = Paragraph::new(title)
 				.style(match APP.input_focus {
 					2 => Style::default().fg(Color::Cyan),
 					_ => {
@@ -1072,7 +1095,13 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 				.block(
 					Block::default()
 						.borders(Borders::ALL)
-						.title(ENCRYPTION_KEY_BLOCK)
+						.title(match APP.input_focus {
+							2 => match APP.inputs[1].len() {
+								0 => ENCRYPTION_KEY_BLOCK_ACTIVE_DISABLE,
+								_ => ENCRYPTION_KEY_BLOCK_ACTIVE_ENABLE
+							},
+							_ => ENCRYPTION_KEY_BLOCK_INACTIVE,
+						})
 						.border_type(match APP.input_focus {
 							2 => BorderType::Thick,
 							_ => BorderType::Double,
