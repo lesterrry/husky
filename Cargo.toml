@@ -19,3 +19,4 @@ tokio-tungstenite = { version = "0.17.1" }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 url = "2.2.2"
 cocoon = "0.2.4"
+rand = "0.8.5"

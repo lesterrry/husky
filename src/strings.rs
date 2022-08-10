@@ -112,6 +112,8 @@ pub mod ui {
 		&str = "FAULT: Attempt to tie with self";
 	pub const TIE_JOB_FAULT_OVERTIE:
 		&str = "FAULT: Existing tie not broken";
+	pub const PLEASE_WAIT:
+		&str = "Please wait";
 	pub const ASTERISK:
 		&str = "*";	
 }

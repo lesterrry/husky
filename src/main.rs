@@ -13,7 +13,7 @@ use crossterm::{
 };
 use futures_util::{SinkExt, StreamExt};
 use reqwest;
-use std::{error::Error, io, panic, process, thread, time};
+use std::{error::Error, io, panic, process, thread, time, str};
 use tokio_tungstenite::{connect_async, tungstenite::Message, MaybeTlsStream, WebSocketStream};
 use tui::{
 	backend::{Backend, CrosstermBackend},
@@ -25,6 +25,8 @@ use tui::{
 };
 use unicode_width::UnicodeWidthStr;
 use cocoon::MiniCocoon;
+use rand::Rng;
+
 mod secure;
 mod strings;
 
@@ -145,6 +147,7 @@ struct App {
 	sending_queue_sent: u8,
 	writer_exists: bool,
 	cocoon: Option<MiniCocoon>,
+	frozen: bool
 }
 
 impl App {
@@ -162,7 +165,8 @@ impl App {
 			sending_queue: Vec::new(),
 			sending_queue_sent: 0,
 			writer_exists: false,
-			cocoon: None
+			cocoon: None,
+			frozen: false
 		}
 	}
 	// FIXME:
@@ -186,7 +190,8 @@ impl App {
 			sending_queue: Vec::new(),
 			sending_queue_sent: 0,
 			writer_exists: false,
-			cocoon: None
+			cocoon: None,
+			frozen: false
 		}
 	}
 	/// Add text to App's job (if current state is `Job`, otherwise do nothing)
@@ -409,6 +414,10 @@ async unsafe fn run_app<B: Backend>(terminal: &mut Terminal<B>) -> io::Result<()
 			}
 			_ => (),
 		}
+		if APP.frozen {
+			terminal.draw(|f| wait_ui(f))?;
+			continue;
+		}
 		match APP.state {
 			AppState::Auth => {
 				terminal.draw(|f| auth_ui(f))?;
@@ -434,7 +443,12 @@ fn asterisks(r#for: &str) -> String {
 
 /// Set up encryption according to current key
 unsafe fn set_encryption() {
-
+	let key = &APP.inputs[1];
+	if key.len() == 0 {
+		APP.cocoon = None;
+	} else {
+		start_encryption_job(key);
+	}
 }
 
 /// Switch App's state to a corresponding one and reset all associated variables
@@ -686,9 +700,7 @@ async unsafe fn write_ws(
 		let app_sent = APP.sending_queue_sent;
 		// Fuck i'm an idiot
 		if app_sent >= 10 && APP.sending_queue.len() < 10 {
-			APP.job_log_add(&format!("1.1"));
 			APP.sending_queue_sent = 0;
-			APP.job_log_add(&format!("1.2"));
 			continue 'outer;
 		}
 		for i in &APP.sending_queue {
@@ -727,7 +739,10 @@ async unsafe fn ws_connect() -> Result<WebSocketStream<MaybeTlsStream<tokio::net
 
 /// Send message to the current tie subject
 async unsafe fn send_message() {
-	let message = APP.inputs[2].clone();
+	let message = match &APP.cocoon {
+		None => APP.inputs[2].clone(),
+		Some(c) => str::from_utf8(&c.encrypt(&mut APP.inputs[2].clone().into_bytes()).unwrap()).unwrap().to_string()
+	};
 	APP.inputs[2] = String::new();
 	APP.sending_queue_add(format!(
 		"{}{}: {}",
@@ -836,6 +851,14 @@ async unsafe fn start_auth_job() {
 		APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 		return;
 	}
+}
+
+/// Change App's state to `Job` and save encryption data
+unsafe fn start_encryption_job(key: &str) {
+	APP.frozen = true;
+	let seed = rand::thread_rng().gen::<[u8; 32]>();
+	APP.cocoon = Some(MiniCocoon::from_password(&key.to_owned().into_bytes(), &seed));
+	APP.frozen = false;
 }
 
 /// Renders app's `Job` state UI
@@ -1166,4 +1189,22 @@ unsafe fn chat_ui<B: Backend>(f: &mut Frame<B>) {
 			panic!("{}", FATAL_RUNTIME_ERROR);
 		}
 	}
+}
+
+/// Renders app's `Wait` UI chunk
+unsafe fn wait_ui<B: Backend>(f: &mut Frame<B>) {
+	let chunks = Layout::default()
+				.direction(Direction::Vertical)
+				.horizontal_margin(12)
+				.constraints([Constraint::Percentage(45), Constraint::Length(1), Constraint::Percentage(50)].as_ref())
+				.split(f.size());
+			let void = Block::default();
+			let main_window = Block::default()
+				.borders(Borders::NONE)
+				.title(PLEASE_WAIT)
+				.title_alignment(Alignment::Center)
+				.style(Style::default().bg(Color::DarkGray));
+			f.render_widget(void.clone(), chunks[0]);
+			f.render_widget(main_window, chunks[1]);
+			f.render_widget(void, chunks[2]);
 }
