@@ -143,7 +143,7 @@ struct App {
 	// Oh this is the stupidest thing in this script
 	// I just couldn't figure out a way to tame all the async stuff otherwise
 	requested_job: u8,
-	sending_queue: Vec<String>,
+	sending_queue: Vec<Vec<u8>>,
 	sending_queue_sent: u8,
 	writer_exists: bool,
 	cocoon: Option<MiniCocoon>,
@@ -244,9 +244,9 @@ impl App {
 	/// Safely add text to App's sending queue
 	fn sending_queue_add(&mut self, msg: String) {
 		if self.sending_queue_sent >= 10 {
-			self.sending_queue = vec![msg]
+			self.sending_queue = vec![msg.into_bytes()]
 		} else {
-			self.sending_queue.push(msg)
+			self.sending_queue.push(msg.into_bytes())
 		}
 	}
 	/// Add text to App Chat's messages (if current state is `Chat`, otherwise do nothing)
@@ -520,7 +520,8 @@ async unsafe fn read_ws(
 	with.for_each(|message| async {
 		match message {
 			Ok(ok) => match ok {
-				Message::Text(txt) => {
+				Message::Binary(bin) => {
+					let txt = String::from_utf8_lossy(&bin);
 					let chars = txt.chars();
 					let flag = chars.clone().collect::<Vec<char>>()[0] as char;
 					match flag {
@@ -710,11 +711,11 @@ async unsafe fn write_ws(
 			}
 			// DEBUG:
 			// APP.job_log_add(&format!("2. s:{} as:{}, i:{}, len:{}", sent, app_sent, i));
-			if with.send(Message::Text(i.to_string())).await.is_err() {
+			if with.send(Message::Binary(i.to_owned())).await.is_err() {
 				APP.job_log_add(AUTH_JOB_CONNECT_FAULT);
 				APP.job_state_set(JobState::Err(JobSwitchAppState::Auth), false);
 			}
-			if i == &TX_DROPME_FLAG.to_string() {
+			if String::from_utf8_lossy(i) == TX_DROPME_FLAG.to_string() {
 				APP.sending_queue = Vec::new();
 				APP.sending_queue_sent = 0;
 				break 'outer;
@@ -741,7 +742,10 @@ async unsafe fn ws_connect() -> Result<WebSocketStream<MaybeTlsStream<tokio::net
 async unsafe fn send_message() {
 	let message = match &APP.cocoon {
 		None => APP.inputs[2].clone(),
-		Some(c) => str::from_utf8(&c.encrypt(&mut APP.inputs[2].clone().into_bytes()).unwrap()).unwrap().to_string()
+		Some(c) => { 
+			let s = String::from_utf8_lossy(&c.wrap(&mut APP.inputs[2].clone().into_bytes()).unwrap()).to_string();
+			String::from_utf8_lossy(&c.unwrap(&s.into_bytes()).unwrap()).to_string()
+		}
 	};
 	APP.inputs[2] = String::new();
 	APP.sending_queue_add(format!(
