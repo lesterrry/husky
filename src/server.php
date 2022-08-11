@@ -92,7 +92,9 @@ function on_close($connect) {
 function on_message($connect, $data) {
 	global $approved, $waitlist, $ties, $user_names;
 	$response = RXTX_OK_FLAG;
-	$txt = decode($data)['payload'];
+	$decoded = decode($data);
+	//var_dump($decoded);
+	$txt = $decoded['payload'];
 	$flag = $txt[0];
 	$body = substr($txt, 1);
 	//echo("Got '" . $txt . "'\n");
